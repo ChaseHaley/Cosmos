@@ -23,8 +23,6 @@ VIEWER_KEY :: render.IMAGE_KEY_TARGET | 1
 VIEWER_ASPECT :: f32(16.0 / 9.0)
 // Room around the viewer, in DIPs.
 MARGIN :: 24
-// When the swap chain cannot pace the loop, as offscreen, frames follow a 60 Hz clock.
-FRAME_TIMEOUT_MS :: 16
 // The menu's text, in DIPs.
 TEXT_SIZE :: 14
 VIDEO_FILTERS :: [?]platform.File_Filter{{"Videos", "*.mp4;*.mkv;*.mov;*.webm"}, {"All files", "*.*"}}
@@ -70,17 +68,13 @@ main :: proc() {
 	if !starter_init(&s, .Auto) {return}
 	defer starter_destroy(&s)
 	for host.running(s.run) {
-		// The viewer plays, so the loop waits only for the swap chain's next frame, an OS message or the
-		// probe's wake.
-		frames: [1]rawptr
-		count := 0
-		if surface := host.surface_get(s.surface); surface != nil {
-			frames[0] = render.frame_waitable(surface)
-			count = frames[0] != nil ? 1 : 0
+		// The viewer plays, so the window always wants a frame: the loop sleeps until its swap chain has
+		// room, an OS message arrives or the probe wakes it.
+		waits: host.Frame_Waits
+		host.frame_waits_add(&waits, s.surface, drawable = true, wants = true, animating = true)
+		if host.frame_wait(&s.desktop, &waits, host.frame_wait_ms(waits, {}, false, {})) != .None {
+			log.error("waiting for events failed")
 		}
-		signaled, err := platform.wait_events(&s.desktop, FRAME_TIMEOUT_MS, frames[:count])
-		if err != .None {log.error("waiting for events failed")}
-		if signaled == 0 && count == 1 {render.frame_signaled(host.surface_get(s.surface))}
 		starter_tick(&s)
 		free_all(context.temp_allocator)
 	}
@@ -138,8 +132,7 @@ starter_tick :: proc(s: ^Starter) {
 	menu_tick(s, host.clock_now(&s.clock))
 	_, settle_error := host.surface_settle(&s.surface, s.device, platform.window_sizing(&s.desktop, s.window))
 	if settle_error == .Device_Lost {starter_recover(s)}
-	if !starter_surface_ready(s) {return}
-	if ready, _ := render.frame_acquire(host.surface_get(s.surface), 0); ready {starter_frame(s)}
+	if starter_surface_ready(s) {starter_frame(s)}
 }
 
 starter_event :: proc(s: ^Starter, event: platform.Event) {
@@ -282,6 +275,8 @@ pattern_color :: proc(frame: int) -> [4]f32 {
 starter_frame :: proc(s: ^Starter) {
 	surface := host.surface_get(s.surface)
 	if surface == nil {return}
+	frame, ready := host.frame_begin(surface, host.clock_now(&s.clock), 0)
+	if !ready {return}
 	viewer := viewer_rect(s.width, s.height, s.scale)
 	size := [2]int{int(viewer.width), int(viewer.height)}
 	if size.x < 1 || size.y < 1 {return}
@@ -295,15 +290,11 @@ starter_frame :: proc(s: ^Starter) {
 	}
 	stand_in_render(s.device, s.viewer, pattern_color(int(s.position)))
 	s.position += s.speed
-	build := render.frame_build_begin(&s.list, s.device)
-	built := render.Frame_Build_Result.Retry
-	for built == .Retry {
-		starter_build(s, viewer)
-		built = render.frame_build_finish(&build)
-	}
-	if built != .Ready {return}
+	if !host.frame_build(&s.list, s.device, Starter_Build{s, viewer}, starter_build) {return}
 	#partial switch err := render.frame_render(s.device, surface, &s.list, s.theme.window); err {
 	case .None:
+		// The viewer moves every frame.
+		host.frame_end(surface, frame, presented = true, moved = true)
 	case .Device_Lost:
 		starter_recover(s)
 	case:
@@ -311,9 +302,16 @@ starter_frame :: proc(s: ^Starter) {
 	}
 }
 
-// The draw list of one frame; an atlas reset stops it, and starter_frame builds it again.
 @(private = "file")
-starter_build :: proc(s: ^Starter, viewer: render.Rect) {
+Starter_Build :: struct {
+	s:      ^Starter,
+	viewer: render.Rect,
+}
+
+// The draw list of one frame; an atlas reset stops it, and host.frame_build builds it again.
+@(private = "file")
+starter_build :: proc(b: Starter_Build) {
+	s, viewer := b.s, b.viewer
 	full := render.Rect{0, 0, f32(s.width), f32(s.height)}
 	if render.push_layer(&s.list, full) != .None {return}
 	if render.push_image(&s.list, {rect = viewer, uv = {0, 0, 1, 1}, key = VIEWER_KEY}) != .None {return}
