@@ -2,7 +2,7 @@ package fuzzy_test
 
 import "core:math"
 import "core:testing"
-import "aio:fuzzy"
+import "cosmos:fuzzy"
 
 @(private="file")
 scratch :: proc(t: ^testing.T) -> ^fuzzy.Scratch {

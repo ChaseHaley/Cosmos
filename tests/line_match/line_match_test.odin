@@ -1,7 +1,7 @@
 package line_match_test
 
-import "aio:line_match"
-import "aio:search"
+import "cosmos:line_match"
+import "cosmos:search"
 import "core:testing"
 
 @(private)

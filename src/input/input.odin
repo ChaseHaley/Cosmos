@@ -196,6 +196,12 @@ Modifier :: enum u16 {
 
 Modifiers :: bit_set[Modifier;u16]
 
+// A key with the modifiers held for it: what a binding or a button's key names.
+Shortcut :: struct {
+	key:       Key,
+	modifiers: Modifiers,
+}
+
 Mouse_Button :: enum u8 {
 	Left = 1,
 	Right,
