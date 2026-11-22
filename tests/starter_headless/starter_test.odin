@@ -1,10 +1,15 @@
 package starter_headless_test
 
 import "core:math"
+import "core:os"
+import "core:path/filepath"
 import "core:testing"
+import "core:time"
+import "cosmos:host"
 import "cosmos:input"
 import "cosmos:platform"
 import "cosmos:render"
+import "cosmos:ui"
 import starter "../../examples/starter"
 
 // The headless platform and WARP: nothing opens on the desktop and the pixels are the same everywhere.
@@ -26,33 +31,145 @@ expect_color :: proc(t: ^testing.T, pixels: []u8, width: i32, x, y: f32, color: 
 	}
 }
 
+@(private = "file")
+read_frame :: proc(t: ^testing.T, s: ^starter.Starter) -> ([]u8, bool) {
+	starter.starter_frame(s)
+	pixels, err := render.surface_read_pixels(s.device, s.surface.(^render.Surface), context.allocator)
+	return pixels, testing.expect_value(t, err, render.Error.None)
+}
+
+@(private = "file")
+key :: proc(s: ^starter.Starter, k: input.Key, modifiers: input.Modifiers = {}) {
+	starter.starter_event(s, input.Key_Event{window = s.window, key = k, modifiers = modifiers, pressed = true})
+}
+
+@(private = "file")
+press :: proc(s: ^starter.Starter, button: input.Mouse_Button, point: [2]f32) {
+	starter.starter_event(s, input.Mouse_Button_Event{window = s.window, button = button, pressed = true, x = i32(point.x), y = i32(point.y)})
+}
+
+@(private = "file")
+move :: proc(s: ^starter.Starter, point: [2]f32) {
+	starter.starter_event(s, input.Mouse_Move_Event{window = s.window, x = i32(point.x), y = i32(point.y)})
+}
+
+@(private = "file")
+row_center :: proc(s: ^starter.Starter, m: ^ui.Menu, row: int) -> [2]f32 {
+	r := ui.menu_row_rect(m, row, f32(s.width), f32(s.height), s.scale)
+	return {r.x + r.width / 2, r.y + r.height / 2}
+}
+
+// The family theme's window colour fills the background and its accent draws the playhead over the
+// renderer's viewer.
 @(test)
 frame_shows_the_renderers_viewer_under_its_marker :: proc(t: ^testing.T) {
 	s: starter.Starter
 	if !open(t, &s) {return}
 	defer starter.starter_destroy(&s)
-	starter.starter_frame(&s)
-	pixels, err := render.surface_read_pixels(s.device, s.surface, context.allocator)
-	if !testing.expect_value(t, err, render.Error.None) {return}
+	pixels, ok := read_frame(t, &s)
+	if !ok {return}
 	defer delete(pixels)
-	viewer := starter.viewer_rect(s.width, s.height)
+	viewer := starter.viewer_rect(s.width, s.height, s.scale)
 	// Whole-pixel edges keep the ratio within a pixel of 16:9.
 	testing.expect(t, abs(viewer.width - viewer.height * starter.VIEWER_ASPECT) <= 1, "viewer is not 16:9")
 	middle := viewer.y + viewer.height / 2
 	expect_color(t, pixels, s.width, viewer.x + viewer.width * 0.75, middle, starter.pattern_color(0), "viewer")
-	expect_color(t, pixels, s.width, starter.marker_rect(viewer).x + 1, middle, starter.MARKER, "marker")
-	expect_color(t, pixels, s.width, 4, 4, starter.BACKGROUND, "background")
+	expect_color(t, pixels, s.width, starter.marker_rect(viewer, s.scale).x + 1, middle, s.theme.accent, "marker")
+	expect_color(t, pixels, s.width, 4, 4, s.theme.window, "background")
 }
 
+// Ctrl+O opens a dialog for many videos; the probe reads each chosen one on its worker and hands its size
+// back. Ctrl+S picks where to export.
 @(test)
-ctrl_o_opens_the_file_dialog_and_keeps_its_choice :: proc(t: ^testing.T) {
+dialogs_choose_videos_the_probe_reads_and_an_export :: proc(t: ^testing.T) {
 	s: starter.Starter
 	if !open(t, &s) {return}
 	defer starter.starter_destroy(&s)
-	testing.expect_value(t, platform.file_pick_script(&s.desktop, `C:\clips\match.mp4`), platform.Error.None)
-	starter.starter_event(&s, input.Key_Event{window = s.window, key = .O, modifiers = {.Control}, pressed = true})
-	testing.expect(t, s.pick != nil, "Ctrl+O opened no dialog")
-	starter.starter_poll_file(&s)
-	testing.expect_value(t, s.chosen, `C:\clips\match.mp4`)
+	directory := os.get_working_directory(context.temp_allocator) or_else "."
+	video, _ := filepath.join({directory, "starter-probe.mp4"}, context.temp_allocator)
+	if !testing.expect_value(t, os.write_entire_file(video, transmute([]u8)string("not really a video")), nil) {return}
+	defer os.remove(video)
+	missing, _ := filepath.join({directory, "starter-missing.mp4"}, context.temp_allocator)
+	testing.expect_value(t, platform.file_pick_script(&s.desktop, video, missing), platform.Error.None)
+	key(&s, .O, {.Control})
+	if !testing.expect(t, s.pick != nil, "Ctrl+O opened no dialog") {return}
+	starter.starter_poll_dialog(&s)
 	testing.expect(t, s.pick == nil, "the finished dialog stayed open")
+	testing.expect_value(t, len(s.videos), 2)
+	deadline := time.tick_add(time.tick_now(), 5 * time.Second)
+	for len(s.probed) < 2 && time.tick_diff(time.tick_now(), deadline) > 0 {
+		time.sleep(time.Millisecond)
+		starter.starter_collect_probes(&s)
+	}
+	if !testing.expect_value(t, len(s.probed), 2) {return}
+	for result in s.probed {
+		if result.path == video {
+			testing.expect(t, result.ok && result.size == len("not really a video"), "the probe read the video")
+		} else {
+			testing.expect(t, !result.ok, "a missing video probes as unreadable")
+		}
+	}
+	records := s.desktop.record.file_picks[:]
+	testing.expect_value(t, records[0].options.mode, platform.File_Pick_Mode.Open_Many)
+	testing.expect_value(t, len(records[0].options.filters), 2)
+
+	testing.expect_value(t, platform.file_pick_script(&s.desktop, `C:\clips\cut.mp4`), platform.Error.None)
+	key(&s, .S, {.Control})
+	starter.starter_poll_dialog(&s)
+	testing.expect_value(t, s.export, `C:\clips\cut.mp4`)
+	testing.expect_value(t, s.desktop.record.file_picks[1].options.mode, platform.File_Pick_Mode.Save)
+	testing.expect_value(t, s.desktop.record.file_picks[1].options.default_extension, "mp4")
+}
+
+// A right click opens the menu; resting on Playback speed opens its submenu, which draws over the viewer
+// in the theme's surface colour; choosing 2× sets the speed and closes both.
+@(test)
+context_menu_sets_the_playback_speed_through_its_submenu :: proc(t: ^testing.T) {
+	s: starter.Starter
+	if !open(t, &s) {return}
+	defer starter.starter_destroy(&s)
+	viewer := starter.viewer_rect(s.width, s.height, s.scale)
+	press(&s, .Right, {viewer.x + 40, viewer.y + 40})
+	if !testing.expect(t, s.menu.shown, "a right click opened no menu") {return}
+	speed := row_center(&s, &s.menu.menu, 3)
+	move(&s, speed)
+	starter.menu_tick(&s, time.tick_add(time.tick_now(), 10 * time.Millisecond))
+	testing.expect(t, !ui.submenu_shown(&s.menu.submenu), "not before the delay")
+	starter.menu_tick(&s, time.tick_add(time.tick_now(), time.Second))
+	if !testing.expect(t, ui.submenu_shown(&s.menu.submenu), "resting opened no submenu") {return}
+
+	pixels, ok := read_frame(t, &s)
+	if !ok {return}
+	defer delete(pixels)
+	surface, _ := ui.menu_layout(&s.menu.submenu.menu, f32(s.width), f32(s.height), s.scale)
+	inside := [2]f32{surface.x + surface.width - 6, surface.y + surface.height / 2}
+	index := (int(inside.y) * int(s.width) + int(inside.x)) * 4
+	behind := starter.pattern_color(0)
+	drawn := [3]f32{f32(pixels[index + 2]), f32(pixels[index + 1]), f32(pixels[index])} / 255
+	testing.expect(t, abs(drawn.r - behind.r) + abs(drawn.g - behind.g) + abs(drawn.b - behind.b) > 0.1, "the submenu draws over the viewer")
+
+	press(&s, .Left, row_center(&s, &s.menu.submenu.menu, 2))
+	testing.expect_value(t, s.speed, f32(2))
+	testing.expect(t, !s.menu.shown && !ui.submenu_shown(&s.menu.submenu), "choosing closed the menus")
+}
+
+// The keyboard opens the submenu at once with Right, and Escape closes the menu before it quits.
+@(test)
+menu_keys_open_the_submenu_and_escape_closes_before_quitting :: proc(t: ^testing.T) {
+	s: starter.Starter
+	if !open(t, &s) {return}
+	defer starter.starter_destroy(&s)
+	press(&s, .Right, {100, 100})
+	ui.menu_select(&s.menu.menu, 3)
+	key(&s, .Arrow_Right)
+	testing.expect(t, ui.submenu_shown(&s.menu.submenu), "Right opened no submenu")
+	testing.expect_value(t, ui.menu_selected(&s.menu.submenu.menu), 0)
+	key(&s, .Enter)
+	testing.expect_value(t, s.speed, f32(0.5))
+	press(&s, .Right, {100, 100})
+	key(&s, .Escape)
+	testing.expect(t, !s.menu.shown)
+	testing.expect_value(t, s.run, host.Run.Running)
+	key(&s, .Escape)
+	testing.expect(t, s.run == .Quit, "Escape with no menu quits")
 }
