@@ -2,7 +2,7 @@ package ui_test
 
 import "core:testing"
 import "core:time"
-import "aio:ui"
+import "cosmos:ui"
 
 @(private)
 TEST_FRAME_PERIOD :: 16 * time.Millisecond

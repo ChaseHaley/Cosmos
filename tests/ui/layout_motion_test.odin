@@ -3,7 +3,7 @@ package ui_test
 import "core:testing"
 import "core:time"
 import "cosmos:render"
-import "aio:ui"
+import "cosmos:ui"
 import "cosmos:motion"
 
 @(private = "file")

@@ -51,7 +51,6 @@ OVERLAY_PADDING :: SPACE_1
 // The inset of a dialog's title, body and buttons from its edge.
 DIALOG_PADDING :: SPACE_4
 // The opacity of a control or item that cannot be used now, and of a list item drawn faded.
-@(private)
 DISABLED_ALPHA :: f32(0.45)
 
 // The radius that fully rounds the short side of `r`: for bars, grooves, underlines and dots.

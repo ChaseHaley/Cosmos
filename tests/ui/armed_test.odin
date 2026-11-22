@@ -1,7 +1,7 @@
 package ui_test
 
 import "core:testing"
-import "aio:ui"
+import "cosmos:ui"
 
 @(test)
 armed_press_and_release_match_one_target :: proc(t: ^testing.T) {

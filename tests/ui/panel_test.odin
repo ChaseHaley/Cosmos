@@ -2,7 +2,7 @@ package ui_test
 
 import "core:testing"
 import "cosmos:render"
-import "aio:ui"
+import "cosmos:ui"
 
 @(test)
 panel_draw_stacks_shadow_border_and_surface :: proc(t: ^testing.T) {

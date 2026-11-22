@@ -8,7 +8,7 @@ USAGE :: `stylecheck [--fix] <file.odin>...
 Checks the whitespace rules the source review found drifting:
   1. Binary +, -, *, / and % take one space on each side.
   2. No source line is wider than 110 columns.
-Interface code (src/ui and the src application package) also follows the design system:
+Interface code (src/ui, an app's src/views and the src application package) also follows the design system:
   3. A corner radius is RADIUS_CONTROL, RADIUS_OVERLAY, pill_radius() or a value derived from them.
   4. Text takes its size from a Text_Style; only ui/text.odin and window.odin call text_set_size.
 A line, or the line before it, with a "design-exempt:" comment and its reason skips rules 3 and 4.
@@ -225,8 +225,8 @@ unspaced :: proc(text: string, at: int) -> bool {
 	return left && right
 }
 
-// Interface code: the ui package and the application package at the top of src. The files that
-// define the design tokens and the type ramp are the only places that may use raw values.
+// Interface code: the ui package, an app's views package and the application package at the top of src.
+// The files that define the design tokens and the type ramp are the only places that may use raw values.
 design_scope :: proc(path: string) -> bool {
 	p, _ := strings.replace_all(path, "\\", "/", context.temp_allocator)
 	// A path relative to the repository root, as build.ps1 passes, has no leading separator.
@@ -234,7 +234,7 @@ design_scope :: proc(path: string) -> bool {
 	if strings.has_suffix(p, "/ui/design.odin") || strings.has_suffix(p, "/ui/text.odin") {return false}
 	if index := strings.last_index(p, "/src/"); index >= 0 {
 		rest := p[index + len("/src/"):]
-		return strings.has_prefix(rest, "ui/") || !strings.contains(rest, "/")
+		return strings.has_prefix(rest, "ui/") || strings.has_prefix(rest, "views/") || !strings.contains(rest, "/")
 	}
 	return false
 }

@@ -2,7 +2,7 @@ package ui_test
 
 import "cosmos:input"
 import "core:testing"
-import "aio:ui"
+import "cosmos:ui"
 
 @(test)
 list_step_classifies_navigation_without_text_or_key_releases :: proc(t: ^testing.T) {

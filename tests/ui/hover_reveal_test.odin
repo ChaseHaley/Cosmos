@@ -1,7 +1,7 @@
 package ui_test
 
 import "cosmos:render"
-import "aio:ui"
+import "cosmos:ui"
 import "core:testing"
 import "core:time"
 

@@ -3,7 +3,7 @@ package ui_test
 import "core:math"
 import "core:testing"
 import "cosmos:render"
-import "aio:ui"
+import "cosmos:ui"
 
 @(private = "file")
 whole :: proc(v: f32) -> bool {return abs(v - math.round(v)) < 1e-3}

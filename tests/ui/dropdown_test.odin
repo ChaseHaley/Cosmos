@@ -5,7 +5,7 @@ import "cosmos:glyphs"
 import "cosmos:input"
 import "cosmos:platform"
 import "cosmos:render"
-import "aio:ui"
+import "cosmos:ui"
 import "core:testing"
 
 @(private = "file")

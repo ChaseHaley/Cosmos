@@ -1,6 +1,6 @@
 package ui_test
 
-import "aio:ui"
+import "cosmos:ui"
 import "cosmos:render"
 import "cosmos:glyphs"
 import "cosmos:font"

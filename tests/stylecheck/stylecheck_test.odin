@@ -131,6 +131,8 @@ design_rules_cover_interface_code_only :: proc(t: ^testing.T) {
 	testing.expect(t, sc.design_scope("C:/repo/src/tab_strip.odin"))
 	testing.expect(t, sc.design_scope("src/ui/menu.odin"))
 	testing.expect(t, sc.design_scope("src/tab_strip.odin"))
+	testing.expect(t, sc.design_scope("src/views/tabs.odin"))
+	testing.expect(t, !sc.design_scope("src/settings/views/list.odin"))
 	testing.expect(t, !sc.design_scope("src/render/render.odin"))
 	testing.expect(t, !sc.design_scope("src/ui/design.odin"))
 	testing.expect(t, !sc.design_scope("C:/repo/src/render/render.odin"))

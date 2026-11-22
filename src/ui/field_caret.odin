@@ -87,7 +87,6 @@ Field_Caret :: struct {
 
 // Where the caret draws this frame, on its way to `cell` (the cell the cursor occupies) from where the
 // previous frame drew it, and whether the surface draws it at all: not while a flight carries it.
-@(private)
 field_caret_pose :: proc(
 	c: ^Field_Caret, carets: ^Carets, origin: [2]f32, cell: render.Rect, theme: Theme,
 ) -> (head: render.Rect, drawn: bool) {
@@ -134,7 +133,6 @@ field_caret_pose :: proc(
 }
 
 // The smear or trail behind a moving caret, drawn under the field's text.
-@(private)
 field_caret_body :: proc(c: ^Field_Caret, list: ^render.Draw_List, theme: Theme) {
 	m := &c.motion
 	if !m.active || c.carets == nil {return}
@@ -148,7 +146,6 @@ field_caret_body :: proc(c: ^Field_Caret, list: ^render.Draw_List, theme: Theme)
 // Draws a caret's head in the cursor's shape. A block covers the text under it, so it draws inside a
 // clip scope over the head, which the caller closes after drawing that text again in `theme.caret_text`;
 // the other shapes need no more and return `block` false.
-@(private)
 field_caret_head :: proc(
 	list: ^render.Draw_List, c: ^Field_Caret, theme: Theme, head: render.Rect,
 ) -> (scope: Clip_Scope, block: bool) {

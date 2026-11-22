@@ -38,7 +38,6 @@ Motion :: struct {
 REORDER_DURATION :: 140 * time.Millisecond
 
 // How long a control takes to light up or settle under hover and press.
-@(private)
 CONTROL_MOTION_DURATION :: 80 * time.Millisecond
 
 motion_active :: proc(m: Motion) -> bool {return m.value != m.target}

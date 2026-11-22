@@ -127,7 +127,6 @@ rune_left :: proc(f: ^Text_Field, at: int) -> int {
 	return atom_edge(f, at - n, false)
 }
 
-@(private)
 rune_right :: proc(f: ^Text_Field, at: int) -> int {
 	if at >= len(f.bytes) {return len(f.bytes)}
 	_, n := utf8.decode_rune(f.bytes[at:])
@@ -236,7 +235,6 @@ word_right :: proc(f: ^Text_Field, at: int) -> int {
 	return i
 }
 
-@(private)
 field_move :: proc(f: ^Text_Field, to: int, extend: bool) -> Field_Change {
 	if extend {
 		if to == f.cursor {return .None}

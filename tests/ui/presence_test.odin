@@ -2,7 +2,7 @@ package ui_test
 
 import "core:testing"
 import "core:time"
-import "aio:ui"
+import "cosmos:ui"
 
 // A stand-in floating surface: the frame gate reads presence_visible and the payload is
 // released only when advance reports the closing motion settled.

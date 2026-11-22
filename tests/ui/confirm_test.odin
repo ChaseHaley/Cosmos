@@ -2,7 +2,7 @@ package ui_test
 
 import "cosmos:input"
 import "core:testing"
-import "aio:ui"
+import "cosmos:ui"
 
 @(private="file")
 press :: proc(key: input.Key_Event) -> input.Key_Event {

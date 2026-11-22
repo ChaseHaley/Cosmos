@@ -1,8 +1,17 @@
 package ui_test
 
-import "aio:ui"
+import "cosmos:input"
+import "cosmos:ui"
 import "core:strings"
 import "core:testing"
+
+// `k` as a press.
+@(private = "file")
+key :: proc(k: input.Key_Event) -> input.Key_Event {
+	e := k
+	e.pressed = true
+	return e
+}
 
 @(test)
 field_selection_replaces_moves_and_deletes_by_word :: proc(t: ^testing.T) {

@@ -6,7 +6,6 @@ import "core:time"
 // The one scrollbar every scrolling surface shows: terminal panes, the everything palette,
 // dropdown lists and the theme filmstrip. The track is the whole expansion zone: the thumb is thin
 // until the pointer enters the width it would expand to, so it always grows under the pointer.
-@(private)
 SCROLLBAR_TRACK :: 10
 @(private = "file")
 SCROLLBAR_THIN :: 4

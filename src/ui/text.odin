@@ -8,32 +8,23 @@ import "core:math"
 import "core:slice"
 import "core:unicode/utf8"
 
-// Every interface color, resolved from the settings theme. Most fields are theme tokens; the
-// hover, pressed, shadow, scrim and rim effects derive from them because they model light rather
-// than name a role.
+// The colours every widget draws with. Most are an app theme's roles; the hover, pressed, shadow,
+// scrim and rim effects derive from them because they model light rather than name a role. An app
+// whose views need more colours embeds this with `using` and passes the embedded Theme to widgets.
 Theme :: struct {
 	window, pane, surface, border, text, muted, faint, accent, accent_text: render.Color,
 	selection, shadow, scrim, hover, pressed, focus, error, success, warning, info: render.Color,
 	tab_bar, tab_text, tab_active, tab_active_text, tab_indicator, rail_active: render.Color,
 	pane_border, pane_focus: render.Color,
 	scrollbar_track, scrollbar, scrollbar_hover, scrollbar_active: render.Color,
-	// Markdown code, inline code and frontmatter fills.
-	code_background: render.Color,
-	// The colours of Markdown's elements.
-	markdown: Markdown_Colors,
-	// The fills behind added and removed lines of a diff.
-	diff_added, diff_removed: render.Color,
-	// The text cursor in every text surface, and the text under a block of it; the terminal's cursor
-	// colours. Text selection is filled with `text_selection`, and selected text takes
-	// `text_selection_text` when the theme sets one.
+	// The text cursor in every text surface, and the text under a block of it. Text selection is
+	// filled with `text_selection`, and selected text takes `text_selection_text` when the theme sets
+	// one.
 	caret, caret_text, text_selection: render.Color,
 	text_selection_text: Maybe(render.Color),
-	// The terminal's 16 colours, which syntax colouring and per-agent tints take their hues from, so
-	// every theme's code reads like its terminal.
-	palette:                  [16]render.Color,
 	// The shared raised-hover look. `rim` is the colour of the pointer-following edge light;
-	// `hover_edge` is the hairline that holds a light fill's shape. lift and gloss are the
-	// interface.hover_lift and interface.hover_gloss settings.
+	// `hover_edge` is the hairline that holds a light fill's shape. Lift and gloss scale the raise and
+	// its sheen, from 0 for none.
 	rim:        render.Color,
 	hover_edge: render.Color,
 	hover_lift, hover_gloss: f32,
@@ -44,7 +35,6 @@ Theme :: struct {
 UI_FAMILIES :: [?]string{"Segoe UI Variable Text", "Segoe UI", "Selawik"}
 @(private)
 ICON_FAMILIES :: [?]string{"Segoe Fluent Icons", "Segoe MDL2 Assets"}
-@(private)
 ELLIPSIS :: "…"
 
 Text :: struct {
@@ -151,7 +141,6 @@ draw_text :: proc(
 	return .Ok
 }
 
-@(private)
 draw_glyph :: proc(
 	t: ^Text,
 	list: ^render.Draw_List,
@@ -177,7 +166,6 @@ wrap :: proc(t: ^Text, s: string, width: f32, out: ^[dynamic]string) {
 }
 
 // Walks the lines `wrap` splits a string into, without storing them. Start with `last_space = -1`.
-@(private)
 Wrap_Lines :: struct {
 	text:                            ^Text,
 	s:                               string,
@@ -187,7 +175,6 @@ Wrap_Lines :: struct {
 }
 
 // The next line's byte range; the space a line breaks at belongs to neither line.
-@(private)
 wrap_next :: proc(w: ^Wrap_Lines) -> (start, end: int, ok: bool) {
 	for w.offset < len(w.s) {
 		offset := w.offset
@@ -237,14 +224,12 @@ Clip_Scope :: struct {
 	restore:  bool,
 }
 
-@(private)
 clip_scope_open :: proc(list: ^render.Draw_List, clip: render.Rect, radius: f32 = 0) -> (Clip_Scope, bool) {
 	scope: Clip_Scope
 	if count := len(list.layers); count > 0 {scope = {list.layers[count - 1], true}}
 	return scope, render.push_layer(list, clip, radius) == .None
 }
 
-@(private)
 clip_scope_close :: proc(list: ^render.Draw_List, scope: Clip_Scope) {
 	if scope.restore {_ = render.push_layer(list, scope.previous.clip, scope.previous.radius)}
 }
@@ -328,7 +313,6 @@ draw_fading_text :: proc(
 	return .Ok
 }
 
-@(private)
 focus_ring_draw :: proc(list: ^render.Draw_List, rect: render.Rect, theme: Theme, scale: f32) {
 	gap := render.Rect {
 		rect.x - scale,

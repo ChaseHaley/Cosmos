@@ -2,7 +2,7 @@ package ui_test
 
 import "cosmos:font"
 import "cosmos:render"
-import "aio:ui"
+import "cosmos:ui"
 import "core:testing"
 
 // A box answers the frame it draws in and the offset for a pointer x. Pressing at either edge
