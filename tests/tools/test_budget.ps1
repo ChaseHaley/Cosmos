@@ -7,7 +7,7 @@ $shell = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
 switch ($Probe) {
     'busy' {
         try { $other = Enter-TestBudget; Exit-TestBudget $other; exit 99 }
-        catch { if ($_.Exception.Message -like 'Another AIODev test run*') { exit 23 }; throw }
+        catch { if ($_.Exception.Message -like 'Another test run owns*') { exit 23 }; throw }
     }
     'inherit' {
         $p = [Diagnostics.Process]::GetCurrentProcess()

@@ -1,4 +1,6 @@
-# Shared by every worktree in the Windows session. Fail fast instead of queuing more suites.
+# Shared by every worktree of every Cosmos family repository in the Windows session. Fail fast instead
+# of queuing more suites. The lease keeps the name AIODev gave it, so checkouts that predate Cosmos and
+# Cosmos-era ones still exclude each other.
 function Enter-TestBudget {
     $lease = [Threading.Mutex]::new($false, 'Local\AIODev.TestBudget.v1')
     $acquired = $false
@@ -7,7 +9,7 @@ function Enter-TestBudget {
         try { $acquired = $lease.WaitOne(0) }
         catch [Threading.AbandonedMutexException] { $acquired = $true }
         if (-not $acquired) {
-            throw 'Another AIODev test run owns the machine test budget. Stop here; run the owed tests after it finishes.'
+            throw 'Another test run owns the machine test budget. Stop here; run the owed tests after it finishes.'
         }
         $hostProcess = [Diagnostics.Process]::GetCurrentProcess()
         $budget = [pscustomobject]@{
@@ -103,4 +105,38 @@ function Invoke-TestCommand([string] $Executable, [string[]] $Arguments, [int] $
             $child.Dispose()
         }
     }
+}
+
+# Compiles and runs one Odin test package under the budget, from the repository root, writing its
+# executable, output log, cost receipt and JSON report under build/test/<RunName>. `Selected` limits the
+# run to comma-separated test names; every name in `Required` must appear in the report, because Odin
+# reports unknown selectors yet exits successfully, even after running no tests. Returns the exit code
+# (1 when a required test did not run) and the parsed report, or $null when there is none.
+function Invoke-OdinTest([string] $Path, [string] $RunName, [string[]] $Arguments, [string] $Selected,
+    [string[]] $Required, [int] $TimeoutSeconds) {
+    New-Item -ItemType Directory -Force build/test | Out-Null
+    $reportPath = "build/test/$RunName.json"
+    Remove-Item -LiteralPath $reportPath -ErrorAction SilentlyContinue
+    $testArgs = @('test', $Path, "-out:build/test/$RunName.exe", '-debug', '-keep-executable',
+        '-thread-count:2', '-define:ODIN_TEST_THREADS=1', '-define:ODIN_TEST_FANCY=false',
+        '-define:ODIN_TEST_LOG_STATE_CHANGES=true', "-define:ODIN_TEST_JSON_REPORT=$reportPath") + $Arguments
+    if ($Selected) { $testArgs += "-define:ODIN_TEST_NAMES=$Selected" }
+    $odin = (Get-Command odin -CommandType Application | Select-Object -First 1).Source
+    $code = Invoke-TestCommand $odin $testArgs $TimeoutSeconds "build/test/$RunName.output.log"
+    $report = $null
+    if (Test-Path -LiteralPath $reportPath) { $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json }
+    if ($code -eq 0 -and $Required) {
+        $ran = @()
+        if ($report) {
+            $ran = foreach ($entry in $report.packages.PSObject.Properties) {
+                foreach ($result in $entry.Value) { $result.name; "$($entry.Name).$($result.name)" }
+            }
+        }
+        $missing = @($Required | Where-Object { $_ -notin $ran })
+        if ($missing) {
+            Write-Host "Requested tests did not run: $($missing -join ', ')"
+            $code = 1
+        }
+    }
+    return [pscustomobject]@{ Code = $code; Report = $report }
 }
