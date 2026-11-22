@@ -2,7 +2,7 @@ package render_test
 
 import "core:testing"
 import "core:time"
-import "aio:render"
+import "cosmos:render"
 
 @(private = "file")
 PERIOD :: 4 * time.Millisecond

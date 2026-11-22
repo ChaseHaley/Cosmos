@@ -1,6 +1,6 @@
 package font_test
 
-import "aio:font"
+import "cosmos:font"
 import "core:testing"
 import "core:slice"
 

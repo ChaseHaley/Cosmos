@@ -1,6 +1,6 @@
 package font
 
-import dw "aio:dwrite"
+import dw "cosmos:dwrite"
 import windows "core:sys/windows"
 
 // The locale shaping and fallback mapping both report for text, so a run maps to the face that

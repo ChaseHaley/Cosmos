@@ -1,7 +1,7 @@
 package glyphs
 
-import "aio:font"
-import "aio:render"
+import "cosmos:font"
+import "cosmos:render"
 import "base:runtime"
 import "core:log"
 import "core:math"

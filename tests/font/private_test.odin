@@ -1,8 +1,8 @@
 package font_test
 
 import "core:testing"
-import "aio:font"
-import test_fonts "../fixtures/fonts"
+import "cosmos:font"
+import "cosmos:test_fonts"
 
 // The bundled families load by name, and an installed font is invisible, so nothing a test draws
 // depends on what the machine has installed.

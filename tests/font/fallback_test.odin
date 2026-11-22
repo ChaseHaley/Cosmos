@@ -1,7 +1,7 @@
 package font_test
 
 import "core:testing"
-import "aio:font"
+import "cosmos:font"
 
 // A 10 point font at 96 and 144 DPI. The fallback decision is one per run and never reads the
 // size, so it must reach the same face at both scales.

@@ -1,6 +1,6 @@
 package font
 
-import dw "aio:dwrite"
+import dw "cosmos:dwrite"
 import windows "core:sys/windows"
 
 // Enumerates the same installed collection used for loading, including per-user fonts.

@@ -1,6 +1,6 @@
 package caret
 
-import "aio:render"
+import "cosmos:render"
 import "core:math"
 import "core:time"
 

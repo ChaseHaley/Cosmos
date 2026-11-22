@@ -1,6 +1,6 @@
 package perf_test
 
-import "aio:perf"
+import "cosmos:perf"
 import "core:testing"
 import "core:time"
 

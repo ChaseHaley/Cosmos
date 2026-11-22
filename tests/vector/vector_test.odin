@@ -2,7 +2,7 @@ package vector_test
 
 import "core:math"
 import "core:testing"
-import "aio:vector"
+import "cosmos:vector"
 
 @(private)
 draw :: proc(t: ^testing.T, data: string, size: int, rule := vector.Fill_Rule.Nonzero) -> []u8 {

@@ -2,7 +2,7 @@
 // WORK-351). They are not shipped; licences are in this folder (README.txt).
 package test_fonts
 
-import "aio:font"
+import "cosmos:font"
 
 MONO :: "Cascadia Mono"
 // Cascadia Mono with programming ligatures.

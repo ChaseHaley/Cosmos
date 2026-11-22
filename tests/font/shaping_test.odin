@@ -5,7 +5,7 @@ import "core:math"
 import "core:mem"
 import "core:slice"
 import "core:testing"
-import "aio:font"
+import "cosmos:font"
 
 @(test)
 programming_ligatures :: proc(t: ^testing.T) {

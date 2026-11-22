@@ -1,9 +1,9 @@
 package glyphs_test
 
 import "core:testing"
-import "aio:font"
-import "aio:glyphs"
-import "aio:render"
+import "cosmos:font"
+import "cosmos:glyphs"
+import "cosmos:render"
 
 Fixture :: struct {
 	fonts: ^font.System,

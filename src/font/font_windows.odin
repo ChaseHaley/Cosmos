@@ -1,7 +1,7 @@
 package font
 
-import dw "aio:dwrite"
-import "aio:render"
+import dw "cosmos:dwrite"
+import "cosmos:render"
 import "base:runtime"
 import "core:log"
 import "core:math"

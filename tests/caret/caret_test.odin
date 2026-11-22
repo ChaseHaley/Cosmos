@@ -1,7 +1,7 @@
 package caret_test
 
-import "aio:caret"
-import "aio:render"
+import "cosmos:caret"
+import "cosmos:render"
 import "core:testing"
 
 @(private)

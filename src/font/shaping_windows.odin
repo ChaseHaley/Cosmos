@@ -1,6 +1,6 @@
 package font
 
-import dw "aio:dwrite"
+import dw "cosmos:dwrite"
 import "base:runtime"
 import "core:slice"
 import "core:unicode"

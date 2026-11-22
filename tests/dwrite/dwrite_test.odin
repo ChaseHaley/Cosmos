@@ -2,7 +2,7 @@ package dwrite_test
 
 import "core:testing"
 import windows "core:sys/windows"
-import "aio:dwrite"
+import "cosmos:dwrite"
 
 @(test)
 abi_layouts :: proc(t: ^testing.T) {

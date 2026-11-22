@@ -4,7 +4,7 @@ import "base:runtime"
 import "core:log"
 import "core:math"
 import "core:testing"
-import "aio:render"
+import "cosmos:render"
 import d3d "vendor:directx/d3d11"
 
 Fixture :: struct {

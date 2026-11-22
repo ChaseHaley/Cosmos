@@ -6,7 +6,7 @@ import "core:math"
 import "core:mem"
 import "core:slice"
 import "core:testing"
-import "aio:font"
+import "cosmos:font"
 
 @(test)
 load_families_and_metrics :: proc(t: ^testing.T) {

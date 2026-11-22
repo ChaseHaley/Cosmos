@@ -4,7 +4,7 @@ import "core:testing"
 import "core:log"
 import "core:strings"
 import "base:runtime"
-import "aio:render"
+import "cosmos:render"
 
 // All failure kinds cross the same completion seam used by windows and pane previews.
 @(test)

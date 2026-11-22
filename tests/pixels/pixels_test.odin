@@ -3,7 +3,7 @@ package pixels_test
 import "core:os"
 import "core:strings"
 import "core:testing"
-import "aio:pixels"
+import "cosmos:pixels"
 
 // put writes one pixel into an image created by this test.
 put :: proc(img: ^pixels.Image, x, y: int, color: [4]u8) {

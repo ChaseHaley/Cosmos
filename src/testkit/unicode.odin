@@ -1,5 +1,6 @@
-// Unicode fixtures shared by the term, term_view, and live tests. See unicode.txt for the format.
-package fixtures_test
+// A Unicode corpus of grapheme clusters with their cell widths, the bytes written for them and the code
+// points a terminal grid stores, for text and terminal tests. See unicode.txt for the format.
+package testkit
 
 import "core:strconv"
 import "core:strings"
@@ -7,6 +8,8 @@ import "core:testing"
 import "core:unicode/utf8"
 
 UNICODE_FIXTURES :: #load("unicode.txt", string)
+// The corpus file itself, for a script or child process a test hands it to.
+UNICODE_FIXTURES_PATH :: #directory + "/unicode.txt"
 
 Unicode_Case :: struct {
 	id: string,
@@ -23,7 +26,13 @@ Unicode_Case :: struct {
 
 // Parses the fixture table. Any malformed line is an error, so a typo cannot silently drop a case.
 @(require_results)
-unicode_cases :: proc(text := UNICODE_FIXTURES, allocator := context.allocator) -> (cases: []Unicode_Case, error: string) {
+unicode_cases :: proc(
+	text := UNICODE_FIXTURES,
+	allocator := context.allocator,
+) -> (
+	cases: []Unicode_Case,
+	error: string,
+) {
 	context.allocator = allocator
 	out: [dynamic]Unicode_Case
 	seen: map[string]bool

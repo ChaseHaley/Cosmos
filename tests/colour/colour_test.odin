@@ -1,6 +1,6 @@
 package colour_test
 
-import "aio:colour"
+import "cosmos:colour"
 import "core:testing"
 
 @(test)

@@ -1,8 +1,9 @@
-package fixtures_test
+// Shared test support for Cosmos and its apps' test packages. Not for shipped code.
+package testkit
 
 import "base:runtime"
-import "aio:font"
-import test_fonts "fonts"
+import "cosmos:font"
+import "cosmos:test_fonts"
 
 // DirectWrite raises and catches a C++ exception the first time a process exercises some
 // shaping paths (seen in Cascadia Code's contextual alternates). Odin's test runner treats any
@@ -19,7 +20,10 @@ warm_directwrite :: proc "contextless" () {
 }
 
 @(private = "file")
-warm_fonts :: proc(create: proc(allocator := context.allocator) -> (^font.System, font.Error), names: []string) {
+warm_fonts :: proc(
+	create: proc(allocator := context.allocator) -> (^font.System, font.Error),
+	names: []string,
+) {
 	s, err := create()
 	if err != .None { return }
 	defer font.system_destroy(s)
