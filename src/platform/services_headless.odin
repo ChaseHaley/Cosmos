@@ -204,62 +204,96 @@ when HEADLESS {
 		}
 	}
 
-	// A dialog that has already closed with the next scripted path, or with nothing.
+	// A dialog that has already closed with the next scripted answer, or with nothing.
 	File_Pick :: struct {
-		path: string,
+		paths: []string,
 	}
 
-	// Queues the path the next file dialog chooses; an empty path cancels it. The verify `pick` request
-	// and tests queue paths here; record.file_picks shows each dialog the app opened.
-	file_pick_script :: proc(p: ^Platform, path: string) -> Error {
-		copied, err := strings.clone(path, p.allocator)
-		if err != nil {return .Out_Of_Memory}
-		if _, append_error := append(&p.file_picks, copied); append_error != nil {
-			delete(copied, p.allocator)
+	// Queues what the next file dialog chooses: `paths`, empty ones left out, so none cancels it. The
+	// verify `pick` request and tests queue answers here; record.file_picks shows each dialog the app
+	// opened.
+	file_pick_script :: proc(p: ^Platform, paths: ..string) -> Error {
+		chosen := make([dynamic]string, 0, len(paths), p.allocator)
+		for path in paths {
+			if path == "" {continue}
+			copied, err := strings.clone(path, p.allocator)
+			if err != nil {
+				paths_free(chosen[:], p.allocator)
+				return .Out_Of_Memory
+			}
+			append(&chosen, copied)
+		}
+		if _, append_error := append(&p.file_picks, chosen[:]); append_error != nil {
+			paths_free(chosen[:], p.allocator)
 			return .Out_Of_Memory
 		}
 		return .None
 	}
 
 	@(require_results)
-	file_pick_start :: proc(
-		p: ^Platform,
-		id: input.Window_Id,
-		filter_name, pattern, directory: string,
-		folders := false,
-	) -> ^File_Pick {
+	file_pick_start :: proc(p: ^Platform, id: input.Window_Id, options: File_Pick_Options) -> ^File_Pick {
 		if find_window(p, id) == nil {return nil}
 		pick, err := new(File_Pick)
 		if err != nil {return nil}
-		if len(p.file_picks) > 0 {
-			chosen := pop_front(&p.file_picks)
-			pick.path, _ = strings.clone(chosen)
-			delete(chosen, p.allocator)
-		}
+		answer: []string
+		if len(p.file_picks) > 0 {answer = pop_front(&p.file_picks)}
+		defer paths_free(answer, p.allocator)
+		pick.paths = paths_clone(answer, context.allocator)
 		record := File_Pick_Record {
-			window  = id,
-			folders = folders,
+			window = id,
+			options = {
+				mode = options.mode,
+				directory = strings.clone(options.directory, p.allocator),
+				file_name = strings.clone(options.file_name, p.allocator),
+				default_extension = strings.clone(options.default_extension, p.allocator),
+			},
+			paths = paths_clone(answer, p.allocator),
 		}
-		record.filter_name, _ = strings.clone(filter_name, p.allocator)
-		record.pattern, _ = strings.clone(pattern, p.allocator)
-		record.directory, _ = strings.clone(directory, p.allocator)
-		record.path, _ = strings.clone(pick.path, p.allocator)
+		filters := make([]File_Filter, len(options.filters), p.allocator)
+		for filter, i in options.filters {
+			filters[i] = {strings.clone(filter.name, p.allocator), strings.clone(filter.pattern, p.allocator)}
+		}
+		record.options.filters = filters
 		if _, append_error := append(&p.record.file_picks, record); append_error != nil {
-			for s in ([?]string{record.filter_name, record.pattern, record.directory, record.path}) {
-				delete(s, p.allocator)
-			}
+			file_pick_record_free(record, p.allocator)
 		}
 		return pick
 	}
 
 	@(require_results)
-	file_pick_finished :: proc(pick: ^File_Pick) -> (path: string, finished: bool) {
-		return pick.path, true
+	file_pick_finished :: proc(pick: ^File_Pick) -> (paths: []string, finished: bool) {
+		return pick.paths, true
 	}
 
 	file_pick_destroy :: proc(pick: ^File_Pick) {
-		delete(pick.path)
+		paths_free(pick.paths, context.allocator)
 		free(pick)
+	}
+
+	@(private)
+	paths_clone :: proc(paths: []string, allocator: runtime.Allocator) -> []string {
+		cloned := make([]string, len(paths), allocator)
+		for path, i in paths {cloned[i] = strings.clone(path, allocator)}
+		return cloned
+	}
+
+	@(private)
+	paths_free :: proc(paths: []string, allocator: runtime.Allocator) {
+		for path in paths {delete(path, allocator)}
+		delete(paths, allocator)
+	}
+
+	@(private)
+	file_pick_record_free :: proc(record: File_Pick_Record, allocator: runtime.Allocator) {
+		for filter in record.options.filters {
+			delete(filter.name, allocator)
+			delete(filter.pattern, allocator)
+		}
+		delete(record.options.filters, allocator)
+		delete(record.options.directory, allocator)
+		delete(record.options.file_name, allocator)
+		delete(record.options.default_extension, allocator)
+		paths_free(record.paths, allocator)
 	}
 
 	// Nothing runs: the headless backend starts no programs of its own on the machine.

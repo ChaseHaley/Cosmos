@@ -110,16 +110,17 @@ starter_event :: proc(s: ^Starter, event: platform.Event) {
 // Opens the system file dialog for a video, unless one is open.
 starter_open_file :: proc(s: ^Starter) {
 	if s.pick != nil {return}
-	s.pick = platform.file_pick_start(&s.desktop, s.window, "Videos", "*.mp4;*.mkv;*.mov;*.webm", "")
+	videos := []platform.File_Filter{{"Videos", "*.mp4;*.mkv;*.mov;*.webm"}}
+	s.pick = platform.file_pick_start(&s.desktop, s.window, {filters = videos})
 }
 
 starter_poll_file :: proc(s: ^Starter) {
 	if s.pick == nil {return}
-	path, finished := platform.file_pick_finished(s.pick)
+	paths, finished := platform.file_pick_finished(s.pick)
 	if !finished {return}
-	if path != "" {
+	if len(paths) > 0 {
 		delete(s.chosen)
-		s.chosen = strings.clone(path)
+		s.chosen = strings.clone(paths[0])
 		log.infof("chose %s", s.chosen)
 	}
 	platform.file_pick_destroy(s.pick)

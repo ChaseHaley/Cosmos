@@ -163,3 +163,38 @@ keys_type_with_the_us_layout :: proc(t: ^testing.T) {
 	testing.expect_value(t, err, platform.Error.None)
 	testing.expect_value(t, e.text, ";")
 }
+
+// Each dialog takes the next scripted answer, which may hold many paths or none, and the record keeps the
+// options the app asked with.
+@(test)
+file_dialogs_answer_from_the_script_in_order :: proc(t: ^testing.T) {
+	p: platform.Platform
+	if !platform_open(t, &p, "FilePick") {return}
+	defer _ = platform.destroy(&p)
+	window := open_window(t, &p, 400, 300)
+	testing.expect_value(t, platform.file_pick_script(&p, `C:\clips\a.mp4`, `C:\clips\b.mp4`), platform.Error.None)
+	testing.expect_value(t, platform.file_pick_script(&p), platform.Error.None)
+	filters := []platform.File_Filter{{"Videos", "*.mp4;*.mkv"}, {"All files", "*.*"}}
+	many := platform.file_pick_start(&p, window, {mode = .Open_Many, filters = filters, directory = `C:\clips`})
+	if !testing.expect(t, many != nil) {return}
+	defer platform.file_pick_destroy(many)
+	paths, finished := platform.file_pick_finished(many)
+	testing.expect(t, finished)
+	testing.expect(t, len(paths) == 2 && paths[0] == `C:\clips\a.mp4` && paths[1] == `C:\clips\b.mp4`)
+	options := platform.File_Pick_Options {
+		mode = .Save, file_name = "cut.mp4", default_extension = "mp4",
+	}
+	save := platform.file_pick_start(&p, window, options)
+	if !testing.expect(t, save != nil) {return}
+	defer platform.file_pick_destroy(save)
+	paths, finished = platform.file_pick_finished(save)
+	testing.expect(t, finished && len(paths) == 0, "the second answer cancels")
+	records := p.record.file_picks[:]
+	if !testing.expect_value(t, len(records), 2) {return}
+	testing.expect_value(t, records[0].options.mode, platform.File_Pick_Mode.Open_Many)
+	testing.expect(t, len(records[0].options.filters) == 2 && records[0].options.filters[1].pattern == "*.*")
+	testing.expect_value(t, records[0].options.directory, `C:\clips`)
+	testing.expect_value(t, len(records[0].paths), 2)
+	testing.expect_value(t, records[1].options.file_name, "cut.mp4")
+	testing.expect_value(t, records[1].options.default_extension, "mp4")
+}

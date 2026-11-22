@@ -73,11 +73,12 @@ when HEADLESS {
 		file_picks:       [dynamic]File_Pick_Record,
 	}
 
-	// A file dialog as the app asked for it, and what the script chose; an empty path is a cancel.
+	// A file dialog as the app asked for it, and what the script chose; no paths is a cancel. The record
+	// owns its strings.
 	File_Pick_Record :: struct {
-		window:                                input.Window_Id,
-		filter_name, pattern, directory, path: string,
-		folders:                               bool,
+		window:  input.Window_Id,
+		options: File_Pick_Options,
+		paths:   []string,
 	}
 
 	// A notification or tray balloon, with the token a click on it reports.
@@ -102,8 +103,8 @@ when HEADLESS {
 		write_queue:      int,
 		error:            Error,
 		clipboard:        string,
-		// Paths the next file dialogs choose, oldest first; an empty string or none cancels.
-		file_picks:       [dynamic]string,
+		// What the next file dialogs choose, oldest first: each answer's paths, none for a cancel.
+		file_picks:       [dynamic][]string,
 		record:           Record,
 		modal_callback:   proc(user: rawptr),
 		modal_user:       rawptr,
@@ -148,7 +149,7 @@ when HEADLESS {
 		}
 		p.windows = make([dynamic]^Window, 0, 4, allocator)
 		p.displays = make([dynamic]Display, 0, 2, allocator)
-		p.file_picks = make([dynamic]string, allocator)
+		p.file_picks = make([dynamic][]string, allocator)
 		p.record = {
 			notifications = make([dynamic]Notification_Record, allocator),
 			tray_menu     = make([dynamic]Tray_Menu_Item, allocator),
@@ -171,7 +172,7 @@ when HEADLESS {
 			delete(q.text, p.allocator)
 		}
 		delete(p.clipboard, p.allocator)
-		for path in p.file_picks {delete(path, p.allocator)}
+		for answer in p.file_picks {paths_free(answer, p.allocator)}
 		delete(p.file_picks)
 		record_clear(p)
 		delete(p.record.notifications)
@@ -193,12 +194,7 @@ when HEADLESS {
 		}
 		for item in p.record.tray_menu {delete(item.title, p.allocator)}
 		delete(p.record.tray_tooltip, p.allocator)
-		for pick in p.record.file_picks {
-			delete(pick.filter_name, p.allocator)
-			delete(pick.pattern, p.allocator)
-			delete(pick.directory, p.allocator)
-			delete(pick.path, p.allocator)
-		}
+		for pick in p.record.file_picks {file_pick_record_free(pick, p.allocator)}
 		clear(&p.record.notifications)
 		clear(&p.record.tray_menu)
 		clear(&p.record.file_picks)
