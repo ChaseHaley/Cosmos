@@ -25,6 +25,14 @@ Driver :: enum {
 	Warp,
 }
 
+// What a device is made for beyond drawing. Video adds Direct3D 11's video interfaces, which hardware
+// decoding on the device needs, as mpv's d3d11va does when it renders into an image_target texture. WARP
+// cannot make a video device, so asking for Video without a GPU fails.
+Device_Option :: enum {
+	Video,
+}
+Device_Options :: bit_set[Device_Option]
+
 // DXGI's adapter description is at most 128 UTF-16 units, each at most three UTF-8 bytes.
 @(private)
 ADAPTER_NAME_BYTES :: 128 * 3
@@ -289,7 +297,7 @@ pixel_shader :: proc(d: ^Device, blob: ^compiler.ID3DBlob) -> (^d3d.IPixelShader
 }
 
 @(private)
-create_native_device :: proc(d: ^Device, choice: Driver) -> win.HRESULT {
+create_native_device :: proc(d: ^Device, choice: Driver, options: Device_Options) -> win.HRESULT {
 	levels := [?]d3d.FEATURE_LEVEL{._11_0}
 	order := [?]Driver{.Hardware, .Warp}
 	tried := order[:]
@@ -304,6 +312,7 @@ create_native_device :: proc(d: ^Device, choice: Driver) -> win.HRESULT {
 	for driver in tried {
 		native: d3d.DRIVER_TYPE = driver == .Warp ? .WARP : .HARDWARE
 		flags: d3d.CREATE_DEVICE_FLAGS = {.BGRA_SUPPORT}
+		if .Video in options {flags += {.VIDEO_SUPPORT}}
 		when ODIN_DEBUG {
 			flags += {.DEBUG}
 		}
@@ -336,7 +345,14 @@ create_native_device :: proc(d: ^Device, choice: Driver) -> win.HRESULT {
 }
 
 @(require_results)
-device_create :: proc(driver: Driver, allocator := context.allocator) -> (^Device, Error) {
+device_create :: proc(
+	driver: Driver,
+	options: Device_Options = {},
+	allocator := context.allocator,
+) -> (
+	^Device,
+	Error,
+) {
 	d, allocation_error := new(Device, allocator)
 	if allocation_error != nil {
 		return nil, .Out_Of_Memory
@@ -359,7 +375,7 @@ device_create :: proc(driver: Driver, allocator := context.allocator) -> (^Devic
 		}
 		shader_code_release(&code)
 	}
-	if err := checked(d, create_native_device(d, driver), "D3D11CreateDevice"); err != .None {
+	if err := checked(d, create_native_device(d, driver, options), "D3D11CreateDevice"); err != .None {
 		return nil, err
 	}
 	dxgi_device: ^dxgi.IDevice

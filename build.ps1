@@ -23,7 +23,10 @@ if ($TestNames -and ($Task -ne 'test' -or -not $Package)) { throw 'TestNames req
 $sourcePackages = @(Get-Packages 'src')
 $testPackages = @(Get-Packages 'tests')
 $toolPackages = @(Get-Packages 'tools')
+# Each example is an app's package main, built against nothing but Cosmos.
+$examplePackages = @(Get-Packages 'examples')
 $vetPackages = $sourcePackages + $toolPackages + ($testPackages | ForEach-Object { "${_}_test" })
+if ($examplePackages) { $vetPackages += 'main' }
 
 # Only the cosmos collection exists here, so a package that imports an app cannot compile.
 $flags = @('-collection:cosmos=src') + $CosmosStrictFlags
@@ -42,6 +45,9 @@ switch ($Task) {
         Invoke-Odin check src/platform -no-entry-point '-define:COSMOS_HEADLESS=true' @flags
         foreach ($name in $toolPackages) {
             Invoke-Odin check "tools/$name" @flags
+        }
+        foreach ($name in $examplePackages) {
+            Invoke-Odin check "examples/$name" @flags
         }
     }
     'test' {

@@ -153,12 +153,15 @@ driver_choice_selects_the_rasterizer :: proc(t: ^testing.T) {
 	defer render.device_destroy(auto)
 	testing.expect_value(t, render.device_driver(auto), render.Driver.Hardware)
 	testing.expect(t, render.device_adapter(auto) != render.device_adapter(warp), "Auto drew on WARP")
+	// A device for video, as mpv's hardware decoding needs, is made on the GPU.
+	video, video_error := render.device_create(.Hardware, {.Video})
+	if testing.expect_value(t, video_error, render.Error.None) {render.device_destroy(video)}
 }
 
 @(test)
 allocation_errors :: proc(t: ^testing.T) {
 	failing := runtime.Allocator{procedure = failing_allocator}
-	d, err := render.device_create(.Warp, failing)
+	d, err := render.device_create(.Warp, allocator = failing)
 	testing.expect_value(t, err, render.Error.Out_Of_Memory)
 	testing.expect_value(t, d, nil)
 	list := render.draw_list_init(failing)

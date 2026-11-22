@@ -20,6 +20,8 @@ Image_Texture :: struct {
 	bytes:         int,
 	last_used:     u64,
 	width, height: int,
+	// An image_target texture: a foreign renderer owns its pixels, and only image_target_release frees it.
+	pinned:        bool,
 }
 
 // image_known reports whether image_upload has settled this key, even if the upload failed.
@@ -102,6 +104,62 @@ image_render :: proc(d: ^Device, key: u64, width, height: int, list: ^Draw_List)
 	return .None
 }
 
+// image_target makes a width x height texture under `key` for a renderer outside this package to draw
+// into, such as a video player, and returns its ID3D11Texture2D: R8G8B8A8_UNORM, one mip, bound as a
+// render target and a shader resource, premultiplied like any image. A key already in use is replaced,
+// so calling it again at a new size resizes. push_image shows it like any image.
+//
+// The texture is pinned: eviction and the image budget leave it alone until image_target_release. The
+// renderer draws with this device's immediate context, on the thread that builds and renders frames and
+// between frames; render sets every pipeline state it uses on each pass, so the renderer may leave state
+// behind, except in the geometry, hull and domain stages, which render never sets. After device loss,
+// make the target again on the new device.
+@(require_results)
+image_target :: proc(d: ^Device, key: u64, width, height: int) -> (texture: rawptr, err: Error) {
+	assert(key & IMAGE_KEY_TARGET != 0, "image_target keys set IMAGE_KEY_TARGET")
+	if d.lost {return nil, .Device_Lost}
+	image_target_release(d, key)
+	if width < 1 ||
+	   height < 1 ||
+	   width > d3d.REQ_TEXTURE2D_U_OR_V_DIMENSION ||
+	   height > d3d.REQ_TEXTURE2D_U_OR_V_DIMENSION {
+		return nil, .Invalid_Argument
+	}
+	entry := Image_Texture {
+		last_used = d.image_frame,
+		width     = width,
+		height    = height,
+		bytes     = width * height * 4,
+		pinned    = true,
+	}
+	ok := false
+	defer if !ok {image_release(&entry)}
+	desc := d3d.TEXTURE2D_DESC {
+		Width = u32(width),
+		Height = u32(height),
+		MipLevels = 1,
+		ArraySize = 1,
+		Format = .R8G8B8A8_UNORM,
+		SampleDesc = {Count = 1},
+		BindFlags = {.SHADER_RESOURCE, .RENDER_TARGET},
+	}
+	hr := d.native->CreateTexture2D(&desc, nil, &entry.texture)
+	if err = checked(d, hr, "CreateTexture2D target image"); err != .None {return nil, err}
+	hr = d.native->CreateShaderResourceView(entry.texture, nil, &entry.view)
+	if err = checked(d, hr, "CreateShaderResourceView target image"); err != .None {return nil, err}
+	ok = true
+	d.images[key] = entry
+	return entry.texture, .None
+}
+
+// image_target_release frees the texture image_target made under `key`; any other key is left alone.
+image_target_release :: proc(d: ^Device, key: u64) {
+	if entry, known := d.images[key]; known && entry.pinned {
+		image_release(&entry)
+		delete_key(&d.images, key)
+	}
+}
+
 @(private, require_results)
 image_texture_create :: proc(
 	d: ^Device,
@@ -164,7 +222,7 @@ images_evict :: proc(d: ^Device) {
 	for {
 		oldest_key, oldest, found := u64(0), max(u64), false
 		for key, entry in d.images {
-			if entry.last_used < d.image_frame && entry.last_used < oldest {
+			if !entry.pinned && entry.last_used < d.image_frame && entry.last_used < oldest {
 				oldest_key, oldest, found = key, entry.last_used, true
 			}
 		}

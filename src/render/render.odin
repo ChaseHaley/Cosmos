@@ -14,6 +14,20 @@ rect_contains :: proc(r: Rect, x, y: f32) -> bool {
 	return x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
 }
 
+// The largest rect of `aspect` (width over height) centred in `container`, with whole-pixel edges, as a
+// video is letterboxed or pillarboxed in its viewer. An empty container or aspect gives an empty rect.
+rect_fit :: proc(container: Rect, aspect: f32) -> Rect {
+	if container.width <= 0 || container.height <= 0 || aspect <= 0 {return {container.x, container.y, 0, 0}}
+	width := min(container.width, container.height * aspect)
+	height := width / aspect
+	return {
+		math.round(container.x + (container.width - width) / 2),
+		math.round(container.y + (container.height - height) / 2),
+		math.round(width),
+		math.round(height),
+	}
+}
+
 // What drawing into a frame under construction reports. Atlas_Reset means the atlas was emptied
 // to make room: every glyph and icon already placed in the frame is stale, so the caller stops
 // drawing and lets Frame_Build start the next attempt.
@@ -90,8 +104,11 @@ Dust :: struct {
 	ash:            Color,
 }
 
-// Keys of the textures image_render draws. image_upload keys never set this bit, so they never collide.
+// Keys of the textures image_render draws. image_upload keys never set this bit or IMAGE_KEY_TARGET's,
+// so they never collide.
 IMAGE_KEY_RENDERED :: u64(1) << 63
+// Keys of the textures image_target makes for a foreign renderer, such as a video player.
+IMAGE_KEY_TARGET :: u64(1) << 62
 
 // A layer draws its rects, then its images, then its glyphs. With `blur` set, it first blurs what is
 // already drawn under its clip, as frosted glass: a gaussian with that standard deviation in pixels.
