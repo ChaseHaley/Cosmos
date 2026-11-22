@@ -1,44 +1,44 @@
-package settings
+package theme
 
 import "core:encoding/json"
 import "core:fmt"
 import "core:strings"
 
 // The JSON schema of a theme file. Its top-level fields and which are required come from
-// THEME_FIELDS; each field's restrictions are the schema's own, written for editors.
+// FIELDS; each field's restrictions are the schema's own, written for editors.
 @(require_results)
-theme_schema_text :: proc(allocator := context.allocator) -> (string, bool) {
+schema_text :: proc(allocator := context.allocator) -> (string, bool) {
 	builder, error := strings.builder_make(context.temp_allocator)
 	if error != nil {return "", false}
 	defer strings.builder_destroy(&builder)
 	if write_parts(&builder, `{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AIODev theme",
+  "title": "Cosmos theme",
   "type": "object",
   "additionalProperties": false,
   "required": [`) != nil {return "", false}
 	first := true
-	for info in THEME_FIELDS {
+	for info in FIELDS {
 		if !info.required {continue}
 		if write_parts(&builder, first ? "" : ", ", `"`, info.key, `"`) != nil {return "", false}
 		first = false
 	}
 	if write_parts(&builder, "],\n  \"properties\": {\n") != nil {return "", false}
 	first = true
-	for info, field in THEME_FIELDS {
+	for info, field in FIELDS {
 		if write_parts(&builder, first ? "" : ",\n", `    "`, info.key, `": `) != nil {return "", false}
 		first = false
-		if !theme_field_schema(&builder, field) {return "", false}
+		if !field_schema(&builder, field) {return "", false}
 	}
 	if write_parts(&builder, "\n  },\n  \"$defs\": {\n    \"colorReference\": ") != nil {return "", false}
-	if !theme_reference_schema(&builder) {return "", false}
+	if !reference_schema(&builder) {return "", false}
 	if write_parts(&builder, "\n  }\n}\n") != nil {return "", false}
 	text, clone_error := strings.clone(strings.to_string(builder), allocator)
 	return text, clone_error == nil
 }
 
 @(private, require_results)
-theme_field_schema :: proc(builder: ^strings.Builder, field: Theme_Field) -> bool {
+field_schema :: proc(builder: ^strings.Builder, field: Field) -> bool {
 	switch field {
 	case .Schema, .Author, .Description:
 		return write_parts(builder, `{"type": "string"}`) == nil
@@ -50,7 +50,7 @@ theme_field_schema :: proc(builder: ^strings.Builder, field: Theme_Field) -> boo
 			`{"type": "string", "pattern": "`,
 			ID_PATTERN,
 			`", "maxLength": `,
-			fmt.tprintf("%d", THEME_ID_MAX_LENGTH),
+			fmt.tprintf("%d", ID_MAX_LENGTH),
 			`}`,
 		) == nil
 	case .Name:
@@ -94,7 +94,7 @@ theme_field_schema :: proc(builder: ^strings.Builder, field: Theme_Field) -> boo
       "properties": {
 `) != nil {return false}
 		first := true
-		for info in THEME_TOKENS {
+		for info in TOKENS {
 			pattern := "^#[0-9a-fA-F]{6}$"
 			if info.kind == .Translucent || info.kind == .Clear {
 				pattern = "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$"
@@ -127,12 +127,12 @@ theme_field_schema :: proc(builder: ^strings.Builder, field: Theme_Field) -> boo
 
 // The keys a color may follow: every theme color that always has a value.
 @(private, require_results)
-theme_reference_schema :: proc(builder: ^strings.Builder) -> bool {
+reference_schema :: proc(builder: ^strings.Builder) -> bool {
 	if write_parts(builder, `{
       "description": "The key of another color of this theme, which this color then follows.",
       "enum": [`) != nil {return false}
 	first := true
-	for info in THEME_TOKENS {
+	for info in TOKENS {
 		if info.kind == .Optional {continue}
 		line := fmt.tprintf("%s%q", first ? "" : ", ", info.key)
 		if write_parts(builder, line) != nil {return false}

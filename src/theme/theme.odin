@@ -1,4 +1,4 @@
-package settings
+package theme
 
 import "cosmos:colour"
 import "core:fmt"
@@ -6,19 +6,17 @@ import "core:strings"
 
 // The fallback theme, compiled in so a missing or emptied themes folder still has one. It is also the
 // root every theme's missing colors come from.
-DEFAULT_THEME_ID :: "studio-dark"
-@(private)
-DEFAULT_THEME_TEXT :: #load("../../themes/studio-dark.theme.json", string)
+DEFAULT_ID :: "studio-dark"
+DEFAULT_TEXT :: #load("../../themes/studio-dark.theme.json", string)
+// How many themes deep a chain of bases may go; the bound also ends a cycle of bases.
+BASE_DEPTH :: 8
 
-// `name` is the active theme's ID: a theme file's or a custom theme's.
-Theme_Settings :: struct {
-	name: string,
-}
-Theme_Color :: colour.Translucent
+// A theme color: an opaque color has alpha 255, and none is alpha 0.
+Color :: colour.Translucent
 
 // Every color a theme owns, interface and terminal alike. Interface colors are semantic roles
 // shared by every control that plays the role, never one per control.
-Theme_Token :: enum {
+Token :: enum {
 	Window,
 	Tab_Bar,
 	Tab_Text,
@@ -124,13 +122,13 @@ Theme_Token :: enum {
 	Palette_14,
 	Palette_15,
 }
-FIRST_TERMINAL_TOKEN :: Theme_Token.Foreground
+FIRST_TERMINAL_TOKEN :: Token.Foreground
 
 // Opaque colors are `#rrggbb`; translucent interface colors may add an alpha byte. Optional is the
 // selection text color alone, whose empty value keeps each cell's own colors. Clear colors, the
 // Markdown element colors, take an alpha byte too and may be none (alpha 0), meaning no fill or the
 // text color around; unlike an optional color, none is a value, so another color may follow them.
-Token_Kind :: enum {
+Kind :: enum {
 	Opaque,
 	Translucent,
 	Optional,
@@ -138,9 +136,9 @@ Token_Kind :: enum {
 }
 Token_Info :: struct {
 	key, title, description: string,
-	kind:                    Token_Kind,
+	kind:                    Kind,
 }
-THEME_TOKENS :: [Theme_Token]Token_Info {
+TOKENS :: [Token]Token_Info {
 	.Window = {"window", "Window background", "Behind panes and around pane cards.", .Opaque},
 	.Tab_Bar = {
 		"tab_bar",
@@ -506,9 +504,9 @@ THEME_TOKENS :: [Theme_Token]Token_Info {
 // background, so a custom theme needs no separate mode. A color in `linked` follows the color
 // `target` names; its entry in `colors` already holds the color it ends at.
 Theme :: struct {
-	colors:                [Theme_Token]Theme_Color,
-	linked:                bit_set[Theme_Token],
-	target:                [Theme_Token]Theme_Token,
+	colors:                [Token]Color,
+	linked:                bit_set[Token],
+	target:                [Token]Token,
 	light, terminal_light: bool,
 }
 
@@ -519,52 +517,60 @@ Theme :: struct {
 // Neovim colorscheme; a base never passes its `neovim` on, since changed colors no longer match it. A
 // color in `linked` holds no color of its own: it follows the color `target` names, wherever that ends
 // up in the resolved theme.
-Custom_Theme :: struct {
+Layer :: struct {
 	id, base, name:     string,
-	colors:             [Theme_Token]Theme_Color,
-	overrides:          bit_set[Theme_Token],
-	linked:             bit_set[Theme_Token],
-	target:             [Theme_Token]Theme_Token,
+	colors:             [Token]Color,
+	overrides:          bit_set[Token],
+	linked:             bit_set[Token],
+	target:             [Token]Token,
 	base_set, name_set: bool,
 	external:           bool,
-	neovim:             Neovim_Theme,
+	neovim:             Neovim,
 }
 
-token_find :: proc(key: string) -> (Theme_Token, bool) {
-	for info, token in THEME_TOKENS {
+token_find :: proc(key: string) -> (Token, bool) {
+	for info, token in TOKENS {
 		if info.key == key {return token, true}
 	}
 	return {}, false
 }
 
-token_terminal :: proc(token: Theme_Token) -> bool {return token >= FIRST_TERMINAL_TOKEN}
+token_terminal :: proc(token: Token) -> bool {return token >= FIRST_TERMINAL_TOKEN}
 
 // Whether a color may carry an alpha byte: a translucent interface color or a Clear one.
-token_alpha :: proc(token: Theme_Token) -> bool {
-	tokens := THEME_TOKENS
+token_alpha :: proc(token: Token) -> bool {
+	tokens := TOKENS
 	return tokens[token].kind == .Translucent || tokens[token].kind == .Clear
 }
 
-// Applies a theme's overrides over its bases, nearest last, then resolves the colors that follow
-// another color. A missing base ends the chain at the default theme, and the depth bound ends a
-// cycle.
-custom_theme_resolve :: proc(s: ^Settings, c: ^Custom_Theme) -> Theme {
-	t, _ := custom_theme_resolve_checked(s, c)
+// The theme with ID `id` among `themes`, or nil.
+find :: proc(themes: []Layer, id: string) -> ^Layer {
+	for &layer in themes {
+		if layer.id == id {return &layer}
+	}
+	return nil
+}
+
+// Applies a theme's overrides over its bases, found among `themes`, nearest last, then resolves the
+// colors that follow another color. A missing base ends the chain at the default theme, and the depth
+// bound ends a cycle.
+resolve :: proc(themes: []Layer, c: ^Layer) -> Theme {
+	t, _ := resolve_checked(themes, c)
 	return t
 }
 
-// custom_theme_resolve, also naming the loop of followed colors that the theme could not resolve,
+// resolve, also naming the loop of followed colors that the theme could not resolve,
 // such as "accent -> cursor -> accent"; empty when there is none. The colors that were part of or
 // led into the loop take the default theme's color. The loop text is temporary.
-custom_theme_resolve_checked :: proc(s: ^Settings, c: ^Custom_Theme) -> (t: Theme, loop: string) {
-	chain: [THEME_BASE_DEPTH]^Custom_Theme
+resolve_checked :: proc(themes: []Layer, c: ^Layer) -> (t: Theme, loop: string) {
+	chain: [BASE_DEPTH]^Layer
 	count := 0
 	for next := c; next != nil && count < len(chain); count += 1 {
 		chain[count] = next
-		next = next.base == "" || s == nil ? nil : custom_theme_find(s, next.base)
+		next = next.base == "" ? nil : find(themes, next.base)
 	}
 	// The default theme already follows the default links, which a layer may replace.
-	t = theme_default()
+	t = default()
 	for i := count - 1; i >= 0; i -= 1 {
 		layer := chain[i]
 		for token in layer.overrides {
@@ -573,22 +579,22 @@ custom_theme_resolve_checked :: proc(s: ^Settings, c: ^Custom_Theme) -> (t: Them
 			if token in layer.linked {t.linked += {token}; t.target[token] = layer.target[token]}
 		}
 	}
-	loop = theme_links_resolve(&t)
-	theme_finish(&t)
+	loop = links_resolve(&t)
+	finish(&t)
 	return
 }
 
 // Gives every followed color the color it ends at, once, so nothing follows a link per frame. A color
 // whose links never end falls back to the default theme's own color and stops following.
 @(private)
-theme_links_resolve :: proc(t: ^Theme) -> (loop: string) {
+links_resolve :: proc(t: ^Theme) -> (loop: string) {
 	if t.linked == {} {return ""}
-	tokens := THEME_TOKENS
-	resolved: [Theme_Token]Theme_Color
-	refused: bit_set[Theme_Token]
+	tokens := TOKENS
+	resolved: [Token]Color
+	refused: bit_set[Token]
 	for token in t.linked {
 		end, reached := token, false
-		for _ in 0 ..< len(Theme_Token) {
+		for _ in 0 ..< len(Token) {
 			if end not_in t.linked {reached = true; break}
 			end = t.target[end]
 		}
@@ -597,8 +603,8 @@ theme_links_resolve :: proc(t: ^Theme) -> (loop: string) {
 		if tokens[token].kind != .Translucent && tokens[token].kind != .Clear {resolved[token].a = 255}
 	}
 	if refused != {} {
-		loop = theme_loop_text(t.linked, &t.target)
-		fallback := theme_default()
+		loop = loop_text(t.linked, &t.target)
+		fallback := default()
 		for token in refused {resolved[token] = fallback.colors[token]}
 	}
 	for token in t.linked {t.colors[token] = resolved[token]}
@@ -609,24 +615,24 @@ theme_links_resolve :: proc(t: ^Theme) -> (loop: string) {
 // Whether `token` may follow `target`: another color that always has a value. The optional colors
 // may be empty, so nothing follows them. A Clear color may be none, which only another Clear color
 // can follow, since the rest have no such value.
-theme_link_valid :: proc(token, target: Theme_Token) -> bool {
-	tokens := THEME_TOKENS
+link_valid :: proc(token, target: Token) -> bool {
+	tokens := TOKENS
 	if token == target || tokens[target].kind == .Optional {return false}
 	return tokens[target].kind != .Clear || tokens[token].kind == .Clear
 }
 
 // A color that a loop of followed colors passes through, or false when every link ends.
 @(private)
-theme_links_loop :: proc(
-	linked: bit_set[Theme_Token],
-	target: ^[Theme_Token]Theme_Token,
+links_loop :: proc(
+	linked: bit_set[Token],
+	target: ^[Token]Token,
 ) -> (
-	on: Theme_Token,
+	on: Token,
 	found: bool,
 ) {
 	for token in linked {
 		at := token
-		for _ in 0 ..< len(Theme_Token) {
+		for _ in 0 ..< len(Token) {
 			if at not_in linked {break}
 			at = target[at]
 		}
@@ -637,13 +643,12 @@ theme_links_loop :: proc(
 
 // "accent -> cursor -> accent" for the first loop of followed colors, starting at the loop's first
 // color in token order; empty when there is none. The result is temporary.
-@(private)
-theme_loop_text :: proc(linked: bit_set[Theme_Token], target: ^[Theme_Token]Theme_Token) -> string {
-	on, found := theme_links_loop(linked, target)
+loop_text :: proc(linked: bit_set[Token], target: ^[Token]Token) -> string {
+	on, found := links_loop(linked, target)
 	if !found {return ""}
 	start := on
 	for at := target[on]; at != on; at = target[at] {start = min(start, at)}
-	tokens := THEME_TOKENS
+	tokens := TOKENS
 	b := strings.builder_make(context.temp_allocator)
 	at := start
 	for {
@@ -660,7 +665,7 @@ theme_loop_text :: proc(linked: bit_set[Theme_Token], target: ^[Theme_Token]Them
 // the shared colors do and move with them in every theme. Theme files need not list them. A token with
 // no entry holds a concrete color; a Clear one with none is none.
 @(rodata)
-TOKEN_DEFAULT_LINKS := #partial [Theme_Token]Maybe(Theme_Token) {
+DEFAULT_LINKS := #partial [Token]Maybe(Token) {
 	.Md_Paragraph_Text         = .Text,
 	.Md_Markup_Text            = .Muted,
 	.Md_H1_Text                = .Md_Heading_Text,
@@ -699,96 +704,74 @@ TOKEN_DEFAULT_LINKS := #partial [Theme_Token]Maybe(Theme_Token) {
 
 // Marks every token with a default link as following it, over the colors `t` holds.
 @(private)
-theme_default_links :: proc(t: ^Theme) {
-	for follows, token in TOKEN_DEFAULT_LINKS {
+default_links :: proc(t: ^Theme) {
+	for follows, token in DEFAULT_LINKS {
 		if target, has := follows.?; has {t.linked += {token}; t.target[token] = target}
 	}
 }
 
 // Whether a theme file may leave `token` out: it follows a default link or may be none.
 @(private)
-theme_file_optional :: proc(token: Theme_Token) -> bool {
-	tokens := THEME_TOKENS
-	return TOKEN_DEFAULT_LINKS[token] != nil || tokens[token].kind == .Clear
+file_optional :: proc(token: Token) -> bool {
+	tokens := TOKENS
+	return DEFAULT_LINKS[token] != nil || tokens[token].kind == .Clear
 }
 
 // The compiled-in theme, complete in every color: the file's own colors are concrete, and the colors it
 // leaves out follow their default links, resolved here, as they do in every other theme.
-theme_default :: proc() -> Theme {
-	file, issue := theme_file_parse(DEFAULT_THEME_TEXT)
+default :: proc() -> Theme {
+	file, issue := file_parse(DEFAULT_TEXT)
 	complete := issue == "" && file.linked == {}
-	for token in Theme_Token {complete &&= token in file.overrides || theme_file_optional(token)}
+	for token in Token {complete &&= token in file.overrides || file_optional(token)}
 	assert(complete, "invalid default theme")
 	t := Theme {
 		colors = file.colors,
 	}
-	theme_default_links(&t)
-	_ = theme_links_resolve(&t)
-	theme_finish(&t)
+	default_links(&t)
+	_ = links_resolve(&t)
+	finish(&t)
 	return t
 }
 
 // The theme one standalone file describes; its base is ignored. `issue` is temporary.
-theme_from_text :: proc(text: string) -> (t: Theme, issue: string) {
-	file: Custom_Theme
-	file, issue = theme_file_parse(text)
+from_text :: proc(text: string) -> (t: Theme, issue: string) {
+	file: Layer
+	file, issue = file_parse(text)
 	if issue != "" {return}
-	return custom_theme_resolve(nil, &file), ""
+	return resolve(nil, &file), ""
 }
 
 // Light themes get paper hovers and stronger shell text contrast; brightness decides, not a flag.
 @(private)
-theme_finish :: proc(t: ^Theme) {
+finish :: proc(t: ^Theme) {
 	t.light = color_light(t.colors[.Window].rgb)
 	t.terminal_light = color_light(t.colors[.Background].rgb)
 }
 
 @(private)
-color_light :: proc(c: Color) -> bool {
+color_light :: proc(c: colour.Value) -> bool {
 	return 0.2126 * f32(c.r) + 0.7152 * f32(c.g) + 0.0722 * f32(c.b) > 127.5
 }
 
 // The color of the cursor in every surface: the theme's own, or its accent when it sets none.
-theme_cursor :: proc(t: Theme) -> Color {
+cursor :: proc(t: Theme) -> colour.Value {
 	if c := t.colors[.Cursor]; c.a != 0 {return c.rgb}
 	return t.colors[.Accent].rgb
 }
 
 // The text under a block cursor: the theme's own, or the text on accent when it sets none.
-theme_cursor_text :: proc(t: Theme) -> Color {
+cursor_text :: proc(t: Theme) -> colour.Value {
 	if c := t.colors[.Cursor_Text]; c.a != 0 {return c.rgb}
 	return t.colors[.Accent_Text].rgb
 }
 
-// The terminal colors a theme gives every session.
-theme_terminal :: proc(t: Theme) -> Color_Settings {
-	c := Color_Settings {
-		foreground                 = t.colors[.Foreground].rgb,
-		background                 = t.colors[.Background].rgb,
-		cursor                     = theme_cursor(t),
-		cursor_text                = theme_cursor_text(t),
-		light                      = t.terminal_light,
-		selection_background       = t.colors[.Selection_Background].rgb,
-		search_foreground          = t.colors[.Search_Foreground].rgb,
-		search_background          = t.colors[.Search_Background].rgb,
-		search_selected_background = t.colors[.Search_Selected_Background].rgb,
-	}
-	if selection := t.colors[.Selection_Foreground]; selection.a != 0 {
-		c.selection_foreground = selection.rgb
-	}
-	for &value, i in c.palette {
-		value = t.colors[Theme_Token(int(Theme_Token.Palette_0) + i)].rgb
-	}
-	return c
-}
-
 // How a theme file or settings line writes a Clear color that is none.
-NONE_COLOR_TEXT :: "#00000000"
+NONE_TEXT :: "#00000000"
 
 // The file text of one theme color: `#rrggbb`, `#rrggbbaa` for a translucent color with alpha, and
 // empty for an unset optional color.
-theme_color_text :: proc(token: Theme_Token, c: Theme_Color) -> string {
-	tokens := THEME_TOKENS
+color_text :: proc(token: Token, c: Color) -> string {
+	tokens := TOKENS
 	buffer: [colour.HEX_ALPHA_LENGTH]u8
 	text: string
 	switch tokens[token].kind {
@@ -801,22 +784,22 @@ theme_color_text :: proc(token: Theme_Token, c: Theme_Color) -> string {
 		text = colour.format_translucent(c, buffer[:])
 	case .Clear:
 		// None is written out, so a line that says "none" is not a line that is missing.
-		if c.a == 0 {return NONE_COLOR_TEXT}
+		if c.a == 0 {return NONE_TEXT}
 		text = colour.format_translucent(c, buffer[:])
 	}
 	return strings.clone(text, context.temp_allocator)
 }
 
 // Parses one theme color as its token allows; `ok` is false for text the token cannot take.
-theme_color_parse :: proc(
-	token: Theme_Token,
+color_parse :: proc(
+	token: Token,
 	text: string,
 	policy: colour.Parse_Policy,
 ) -> (
-	Theme_Color,
+	Color,
 	bool,
 ) {
-	tokens := THEME_TOKENS
+	tokens := TOKENS
 	switch tokens[token].kind {
 	case .Optional:
 		if text == "" {return {}, true}
@@ -837,13 +820,13 @@ theme_color_parse :: proc(
 }
 
 // What a theme file or settings line holds for one color: a concrete color, or the color it follows.
-Theme_Value :: struct {
-	color:  Theme_Color,
-	target: Theme_Token,
+Value :: struct {
+	color:  Color,
+	target: Token,
 	linked: bool,
 }
 
-Theme_Value_Problem :: enum {
+Value_Problem :: enum {
 	None,
 	// Neither a color nor a theme color's key.
 	Invalid,
@@ -856,20 +839,20 @@ Theme_Value_Problem :: enum {
 
 // Parses one color's value: the key of another theme color, such as accent, or a color as the token
 // allows.
-theme_value_parse :: proc(
-	token: Theme_Token,
+value_parse :: proc(
+	token: Token,
 	text: string,
 	policy: colour.Parse_Policy,
 ) -> (
-	value: Theme_Value,
-	problem: Theme_Value_Problem,
+	value: Value,
+	problem: Value_Problem,
 ) {
 	if target, found := token_find(strings.trim_space(text)); found {
 		if target == token {return {}, .Self_Link}
-		if !theme_link_valid(token, target) {return {}, .Optional_Link}
+		if !link_valid(token, target) {return {}, .Optional_Link}
 		return {target = target, linked = true}, .None
 	}
-	color, valid := theme_color_parse(token, text, policy)
+	color, valid := color_parse(token, text, policy)
 	if valid {return {color = color}, .None}
 	for i in 0 ..< len(text) {
 		c := text[i]
@@ -880,9 +863,8 @@ theme_value_parse :: proc(
 }
 
 // Why a followed color was refused, as a clause. Temporary; empty for a problem of the color itself.
-@(private)
-theme_link_issue :: proc(token: Theme_Token, text: string, problem: Theme_Value_Problem) -> string {
-	tokens := THEME_TOKENS
+link_issue :: proc(token: Token, text: string, problem: Value_Problem) -> string {
+	tokens := TOKENS
 	switch problem {
 	case .Unknown_Link:
 		return fmt.tprintf(
@@ -899,9 +881,9 @@ theme_link_issue :: proc(token: Theme_Token, text: string, problem: Theme_Value_
 }
 
 // The file text of one theme color: the key of the color it follows, or its own color as
-// theme_color_text writes it.
-theme_value_text :: proc(token: Theme_Token, value: Theme_Value) -> string {
-	tokens := THEME_TOKENS
+// color_text writes it.
+value_text :: proc(token: Token, value: Value) -> string {
+	tokens := TOKENS
 	if value.linked {return tokens[value.target].key}
-	return theme_color_text(token, value.color)
+	return color_text(token, value.color)
 }

@@ -1,16 +1,15 @@
-package settings
+package theme
 
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:strings"
 
-THEME_FILE_MAX_BYTES :: 64 * 1024
-@(private)
-THEME_FILE_SIZE_NOTICE :: "Theme file exceeds 64 KiB."
+FILE_MAX_BYTES :: 64 * 1024
+FILE_SIZE_NOTICE :: "Theme file exceeds 64 KiB."
 
 // The top-level fields of a theme file, in the order the schema lists them.
-Theme_Field :: enum {
+Field :: enum {
 	Schema,
 	Version,
 	Id,
@@ -22,25 +21,25 @@ Theme_Field :: enum {
 	Colors,
 }
 
-Theme_Field_Kind :: enum {
+Field_Kind :: enum {
 	String,
 	// The format version, which must be 1.
 	Version,
-	// The neovim object, checked by neovim_theme_parse.
+	// The neovim object, checked by neovim_parse.
 	Neovim,
 	// The colors object, checked token by token.
 	Colors,
 }
 
-Theme_Field_Info :: struct {
+Field_Info :: struct {
 	key:      string,
-	kind:     Theme_Field_Kind,
+	kind:     Field_Kind,
 	required: bool,
 }
 
-// What theme_file_parse accepts and theme_schema_text describes at the top level of a theme file.
+// What file_parse accepts and schema_text describes at the top level of a theme file.
 @(rodata)
-THEME_FIELDS := [Theme_Field]Theme_Field_Info {
+FIELDS := [Field]Field_Info {
 	.Schema      = {key = "$schema", kind = .String},
 	.Version     = {key = "version", kind = .Version, required = true},
 	.Id          = {key = "id", kind = .String, required = true},
@@ -53,14 +52,14 @@ THEME_FIELDS := [Theme_Field]Theme_Field_Info {
 }
 
 @(private)
-theme_field_find :: proc(key: string) -> (Theme_Field_Info, bool) {
-	for info in THEME_FIELDS {if info.key == key {return info, true}}
+field_find :: proc(key: string) -> (Field_Info, bool) {
+	for info in FIELDS {if info.key == key {return info, true}}
 	return {}, false
 }
 
 @(require_results)
-theme_file_parse :: proc(text: string) -> (theme: Custom_Theme, issue: string) {
-	if len(text) > THEME_FILE_MAX_BYTES {return {}, THEME_FILE_SIZE_NOTICE}
+file_parse :: proc(text: string) -> (theme: Layer, issue: string) {
+	if len(text) > FILE_MAX_BYTES {return {}, FILE_SIZE_NOTICE}
 	lexer := json.make_tokenizer(text, .JSON)
 	depth, completed := 0, false
 	previous := json.Token_Kind.Invalid
@@ -86,7 +85,7 @@ theme_file_parse :: proc(text: string) -> (theme: Custom_Theme, issue: string) {
 	object, object_ok := value.(json.Object)
 	if !object_ok {return {}, "Expected a theme object."}
 	for key, entry in object {
-		info, known := theme_field_find(key)
+		info, known := field_find(key)
 		if !known {return {}, fmt.tprintf("Unknown theme field: %s", key)}
 		switch info.kind {
 		case .String:
@@ -101,13 +100,13 @@ theme_file_parse :: proc(text: string) -> (theme: Custom_Theme, issue: string) {
 	id, id_ok := object["id"].(json.String)
 	version, version_ok := object["version"].(json.Float)
 	colors, colors_ok := object["colors"].(json.Object)
-	if !id_ok || !theme_id_valid(string(id)) {return {}, "Invalid theme ID."}
+	if !id_ok || !id_valid(string(id)) {return {}, "Invalid theme ID."}
 	if !version_ok || version != 1 {return {}, "Expected theme version 1."}
 	if !colors_ok {return {}, "Expected a colors object."}
 	if base, has_base := object["base"].(json.String); has_base {
-		if !theme_id_valid(string(base)) {return {}, "Invalid base theme ID."}
+		if !id_valid(string(base)) {return {}, "Invalid base theme ID."}
 		// Temporary like the ID below.
-		cloned, clone_error := strings.clone(theme_legacy_base(string(base)), context.temp_allocator)
+		cloned, clone_error := strings.clone(legacy_base(string(base)), context.temp_allocator)
 		if clone_error != nil {return {}, "Could not allocate base theme ID."}
 		theme.base = cloned
 	}
@@ -121,9 +120,9 @@ theme_file_parse :: proc(text: string) -> (theme: Custom_Theme, issue: string) {
 		if !known {return {}, fmt.tprintf("Unknown theme color: %s", key)}
 		color_text, ok := entry.(json.String)
 		if !ok {return {}, fmt.tprintf("Expected a color string for %s", key)}
-		value, problem := theme_value_parse(token, string(color_text), .Strict)
+		value, problem := value_parse(token, string(color_text), .Strict)
 		if problem != .None {
-			if clause := theme_link_issue(token, string(color_text), problem); clause != "" {
+			if clause := link_issue(token, string(color_text), problem); clause != "" {
 				return {}, fmt.tprintf("Invalid theme color: %s, %s", key, clause)
 			}
 			return {}, fmt.tprintf("Invalid theme color: %s", key)
@@ -132,11 +131,11 @@ theme_file_parse :: proc(text: string) -> (theme: Custom_Theme, issue: string) {
 		if value.linked {theme.linked += {token}; theme.target[token] = value.target}
 		theme.overrides += {token}
 	}
-	if loop := theme_loop_text(theme.linked, &theme.target); loop != "" {
+	if loop := loop_text(theme.linked, &theme.target); loop != "" {
 		return {}, fmt.tprintf("Theme colors follow each other in a loop: %s", loop)
 	}
 	if neovim, has_neovim := object["neovim"]; has_neovim {
-		neovim_theme, neovim_issue := neovim_theme_parse(neovim)
+		neovim_theme, neovim_issue := neovim_parse(neovim)
 		if neovim_issue != "" {return {}, neovim_issue}
 		theme.neovim = neovim_theme
 	}
@@ -148,8 +147,9 @@ theme_file_parse :: proc(text: string) -> (theme: Custom_Theme, issue: string) {
 	return
 }
 
+// The bundled themes beside the running executable, in its `themes` folder. Temporary.
 @(require_results)
-theme_directory :: proc() -> string {
+bundled_directory :: proc() -> string {
 	path, error := os.get_executable_directory(context.temp_allocator)
 	if error != nil {return ""}
 	return fmt.tprintf("%s/themes", path)
@@ -159,18 +159,18 @@ theme_directory :: proc() -> string {
 // follows another is written as that color's key. Empty metadata is left out, and so is `neovim`
 // without a colorscheme.
 @(require_results)
-theme_file_text :: proc(
+file_text :: proc(
 	id: string,
 	theme: Theme,
 	name := "",
 	description := "",
-	neovim := Neovim_Theme{},
+	neovim := Neovim{},
 	allocator := context.allocator,
 ) -> (
 	string,
 	bool,
 ) {
-	if !theme_id_valid(id) {return "", false}
+	if !id_valid(id) {return "", false}
 	builder, error := strings.builder_make(context.temp_allocator)
 	if error != nil {return "", false}
 	defer strings.builder_destroy(&builder)
@@ -180,65 +180,15 @@ theme_file_text :: proc(
 	if description != "" && !write_json_string(&builder, "  ", "description", description, ",\n") {
 		return "", false
 	}
-	if !write_neovim_theme(&builder, neovim) {return "", false}
+	if !neovim_write(&builder, neovim) {return "", false}
 	if write_parts(&builder, "  \"colors\": {\n") != nil {return "", false}
-	for info, token in THEME_TOKENS {
-		separator := token == max(Theme_Token) ? "\n" : ",\n"
+	for info, token in TOKENS {
+		separator := token == max(Token) ? "\n" : ",\n"
 		linked := token in theme.linked
-		value := theme_value_text(token, {theme.colors[token], theme.target[token], linked})
+		value := value_text(token, {theme.colors[token], theme.target[token], linked})
 		if !write_json_string(&builder, "    ", info.key, value, separator) {return "", false}
 	}
 	if write_parts(&builder, "  }\n}\n") != nil {return "", false}
 	text, clone_error := strings.clone(strings.to_string(builder), allocator)
 	return text, clone_error == nil
-}
-
-// Exclusive creation never replaces another creator's file, including repeated exports.
-@(require_results)
-theme_export :: proc(s: ^Settings, directory: string) -> (path: string, error: os.Error) {
-	if directory == "" {return "", os.General_Error.Invalid_File}
-	if error = os.mkdir_all(directory); error != nil {return}
-	schema, schema_ok := theme_schema_text(context.temp_allocator)
-	if !schema_ok {return "", os.General_Error.Invalid_File}
-	schema_path := fmt.tprintf("%s/theme.schema.json", directory)
-	schema_file, schema_error := os.open(schema_path, os.O_WRONLY | os.O_CREATE | os.O_EXCL)
-	if schema_error == nil {
-		n, write_error := os.write(schema_file, transmute([]u8)schema)
-		close_error := os.close(schema_file)
-		if write_error != nil || close_error != nil || n != len(schema) {
-			_ = os.remove(schema_path)
-			return "", os.General_Error.Invalid_File
-		}
-	} else if schema_error != .Exist {return "", schema_error}
-	for number := 1; number <= 1000; number += 1 {
-		id := fmt.tprintf("export-%s-%d", s.theme.name, number)
-		if len(id) > THEME_ID_MAX_LENGTH {id = fmt.tprintf("export-theme-%d", number)}
-		path = fmt.tprintf("%s/%s.theme.json", directory, id)
-		file, open_error := os.open(path, os.O_WRONLY | os.O_CREATE | os.O_EXCL)
-		if open_error == .Exist {continue}
-		if open_error != nil {return "", open_error}
-		name := theme_display_name(s, s.theme.name)
-		neovim := theme_neovim(s, s.theme.name)
-		text, ok := theme_file_text(
-			id,
-			s.active_theme,
-			name,
-			neovim = neovim,
-			allocator = context.temp_allocator,
-		)
-		if !ok {
-			_ = os.close(file)
-			_ = os.remove(path)
-			return "", os.General_Error.Invalid_File
-		}
-		n, write_error := os.write(file, transmute([]u8)text)
-		sync_error := os.sync(file)
-		close_error := os.close(file)
-		if write_error != nil || sync_error != nil || close_error != nil || n != len(text) {
-			_ = os.remove(path)
-			return "", os.General_Error.Invalid_File
-		}
-		return path, nil
-	}
-	return "", os.General_Error.Exist
 }
