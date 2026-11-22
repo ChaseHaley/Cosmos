@@ -1,21 +1,21 @@
-package markdown_test
+package textedit_test
 
-import "aio:markdown"
+import "cosmos:textedit"
 import "core:strings"
 import "core:testing"
 
 @(private = "file")
-selection_buffer :: proc(t: ^testing.T, text: string) -> markdown.Edit_Buffer {
-	b: markdown.Edit_Buffer
-	testing.expect(t, markdown.edit_buffer_init(&b, text))
+selection_buffer :: proc(t: ^testing.T, text: string) -> textedit.Buffer {
+	b: textedit.Buffer
+	testing.expect(t, textedit.init(&b, text))
 	return b
 }
 
 @(private = "file")
 word_at :: proc(t: ^testing.T, text: string, at: int) -> string {
 	b := selection_buffer(t, text)
-	defer markdown.edit_buffer_destroy(&b)
-	from, to := markdown.edit_word_at(&b, at)
+	defer textedit.destroy(&b)
+	from, to := textedit.word_at(&b, at)
 	return text[from:to]
 }
 
@@ -56,9 +56,9 @@ a_word_stops_at_the_line_ending_and_an_empty_line_selects_nothing :: proc(t: ^te
 	testing.expect_value(t, word_at(t, text, 4), "one")
 	testing.expect_value(t, word_at(t, text, 5), "two")
 	b := selection_buffer(t, text)
-	defer markdown.edit_buffer_destroy(&b)
+	defer textedit.destroy(&b)
 	empty := strings.index(text, "\n\n") + 1
-	from, to := markdown.edit_word_at(&b, empty)
+	from, to := textedit.word_at(&b, empty)
 	testing.expect_value(t, from, empty)
 	testing.expect_value(t, to, empty)
 }
@@ -66,11 +66,11 @@ a_word_stops_at_the_line_ending_and_an_empty_line_selects_nothing :: proc(t: ^te
 @(test)
 no_word_reaches_into_the_byte_order_mark :: proc(t: ^testing.T) {
 	b := selection_buffer(t, "\xEF\xBB\xBFfoo bar")
-	defer markdown.edit_buffer_destroy(&b)
-	from, to := markdown.edit_word_at(&b, 0)
+	defer textedit.destroy(&b)
+	from, to := textedit.word_at(&b, 0)
 	testing.expect_value(t, from, 3)
 	testing.expect_value(t, to, 6)
-	from, to = markdown.edit_line_at(&b, 1)
+	from, to = textedit.line_at(&b, 1)
 	testing.expect_value(t, from, 3)
 	testing.expect_value(t, to, 10)
 }
@@ -79,23 +79,23 @@ no_word_reaches_into_the_byte_order_mark :: proc(t: ^testing.T) {
 a_line_selects_with_its_ending :: proc(t: ^testing.T) {
 	text := "one\r\ntwo\nthree"
 	b := selection_buffer(t, text)
-	defer markdown.edit_buffer_destroy(&b)
-	from, to := markdown.edit_line_at(&b, 1)
+	defer textedit.destroy(&b)
+	from, to := textedit.line_at(&b, 1)
 	testing.expect_value(t, text[from:to], "one\r\n")
-	from, to = markdown.edit_line_at(&b, 4)
+	from, to = textedit.line_at(&b, 4)
 	testing.expect_value(t, text[from:to], "one\r\n")
-	from, to = markdown.edit_line_at(&b, 6)
+	from, to = textedit.line_at(&b, 6)
 	testing.expect_value(t, text[from:to], "two\n")
-	from, to = markdown.edit_line_at(&b, len(text))
+	from, to = textedit.line_at(&b, len(text))
 	testing.expect_value(t, text[from:to], "three")
 }
 
 @(private = "file")
-dragged :: proc(t: ^testing.T, text: string, origin: string, unit: markdown.Edit_Unit, at: int) -> (anchor, caret: int) {
+dragged :: proc(t: ^testing.T, text: string, origin: string, unit: textedit.Unit, at: int) -> (anchor, caret: int) {
 	b := selection_buffer(t, text)
-	defer markdown.edit_buffer_destroy(&b)
+	defer textedit.destroy(&b)
 	from := strings.index(text, origin)
-	markdown.edit_select_unit(&b, from, from + len(origin), unit, at)
+	textedit.select_unit(&b, from, from + len(origin), unit, at)
 	return b.anchor, b.caret
 }
 
@@ -128,32 +128,32 @@ dragging_after_a_triple_click_grows_by_whole_lines :: proc(t: ^testing.T) {
 @(test)
 home_goes_to_the_first_character_and_back_and_to_the_row_before_both :: proc(t: ^testing.T) {
 	b := selection_buffer(t, "  indented text\nnext")
-	defer markdown.edit_buffer_destroy(&b)
-	markdown.edit_move(&b, 9)
-	testing.expect_value(t, markdown.edit_home_target(&b, 0), 2)
-	markdown.edit_move(&b, 2)
-	testing.expect_value(t, markdown.edit_home_target(&b, 0), 0)
-	markdown.edit_move(&b, 0)
-	testing.expect_value(t, markdown.edit_home_target(&b, 0), 2)
+	defer textedit.destroy(&b)
+	textedit.move(&b, 9)
+	testing.expect_value(t, textedit.home_target(&b, 0), 2)
+	textedit.move(&b, 2)
+	testing.expect_value(t, textedit.home_target(&b, 0), 0)
+	textedit.move(&b, 0)
+	testing.expect_value(t, textedit.home_target(&b, 0), 2)
 	// On a soft-wrapped line the row's own start comes first; from there the line's rules apply.
-	markdown.edit_move(&b, 12)
-	testing.expect_value(t, markdown.edit_home_target(&b, 10), 10)
-	markdown.edit_move(&b, 10)
-	testing.expect_value(t, markdown.edit_home_target(&b, 10), 2)
+	textedit.move(&b, 12)
+	testing.expect_value(t, textedit.home_target(&b, 10), 10)
+	textedit.move(&b, 10)
+	testing.expect_value(t, textedit.home_target(&b, 10), 2)
 	blank := selection_buffer(t, "   \nx")
-	defer markdown.edit_buffer_destroy(&blank)
-	markdown.edit_move(&blank, 3)
-	testing.expect_value(t, markdown.edit_home_target(&blank, 0), 0)
+	defer textedit.destroy(&blank)
+	textedit.move(&blank, 3)
+	testing.expect_value(t, textedit.home_target(&blank, 0), 0)
 }
 
 @(test)
 end_goes_to_the_row_end_before_the_line_end :: proc(t: ^testing.T) {
 	b := selection_buffer(t, "aaaa bbbb\r\nnext")
-	defer markdown.edit_buffer_destroy(&b)
-	markdown.edit_move(&b, 1)
-	testing.expect_value(t, markdown.edit_end_target(&b, 4), 4)
-	markdown.edit_move(&b, 4)
-	testing.expect_value(t, markdown.edit_end_target(&b, 4), 9)
-	markdown.edit_move(&b, 6)
-	testing.expect_value(t, markdown.edit_end_target(&b, 9), 9)
+	defer textedit.destroy(&b)
+	textedit.move(&b, 1)
+	testing.expect_value(t, textedit.end_target(&b, 4), 4)
+	textedit.move(&b, 4)
+	testing.expect_value(t, textedit.end_target(&b, 4), 9)
+	textedit.move(&b, 6)
+	testing.expect_value(t, textedit.end_target(&b, 9), 9)
 }
