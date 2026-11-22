@@ -5,11 +5,10 @@ package platform
 @(require) import "core:strings"
 @(require) import w "core:sys/windows"
 @(require) import "core:unicode/utf16"
-@(require) import "aio:links"
-@(require) import "aio:localpath"
+@(require) import "cosmos:weburl"
 
-// The Win32 backend; a headless build compiles another (see AIO_HEADLESS in platform.odin).
-when !AIO_HEADLESS {
+// The Win32 backend; a headless build compiles another (see HEADLESS in platform.odin).
+when !HEADLESS {
 	// Requested → Added. Explorer restarting drops the icon, so its broadcast brings the tray back here.
 	@(require_results)
 	@(private)
@@ -323,7 +322,7 @@ when !AIO_HEADLESS {
 	// non-http(s) scheme, Windows path shape, credential form and control character.
 	@(require_results)
 	open_url :: proc(uri: string) -> bool {
-		if !links.allowed(uri) {
+		if !weburl.allowed(uri) {
 			log.warnf("platform: refusing to open a non-web target")
 			return false
 		}

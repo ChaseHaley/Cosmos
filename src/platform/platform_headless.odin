@@ -12,7 +12,7 @@ package platform
 // desktop held here. Nothing appears on the owner's desktop and nothing asks for the foreground.
 // Window handles are nil, so surfaces render offscreen. Events come only from the app's own calls,
 // such as a resize, and from whoever drives it: tests through the app, a harness through verify.
-when AIO_HEADLESS {
+when HEADLESS {
 	@(private)
 	EVENT_CAPACITY :: 2048
 	@(private)

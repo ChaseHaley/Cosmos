@@ -8,8 +8,8 @@ package platform
 @(require) import "core:unicode/utf16"
 @(require) import "core:unicode/utf8"
 
-// The Win32 backend; a headless build compiles another (see AIO_HEADLESS in platform.odin).
-when !AIO_HEADLESS {
+// The Win32 backend; a headless build compiles another (see HEADLESS in platform.odin).
+when !HEADLESS {
 	@(private)
 	ACTIVATE_MESSAGE :: w.WM_APP + 1
 	@(private)

@@ -4,7 +4,7 @@ package platform
 @(require) import "core:log"
 @(require) import w "core:sys/windows"
 
-when !AIO_HEADLESS {
+when !HEADLESS {
 	foreign import webview_native {
 		"../../build/native/webview.lib",
 		"../../vendor/webview2/x64/WebView2LoaderStatic.lib",
@@ -46,18 +46,18 @@ when !AIO_HEADLESS {
 
 	@(default_calling_convention = "c")
 	foreign webview_native {
-		aio_webview_host_create :: proc(
+		cosmos_webview_host_create :: proc(
 			hwnd: w.HWND, d3d_device, dxgi_factory: rawptr, out_host: ^rawptr,
 		) -> i32 ---
-		aio_webview_host_destroy :: proc(host: rawptr) ---
-		aio_webview_host_overlay_begin :: proc(host: rawptr, layer, width, height: i32) -> rawptr ---
-		aio_webview_host_overlay_present :: proc(host: rawptr, layer: i32) ---
-		aio_webview_host_overlay_hide :: proc(host: rawptr, layer: i32) ---
-		aio_webview_host_trim :: proc(host: rawptr, count: i32) ---
-		aio_webview_host_commit :: proc(host: rawptr) ---
-		aio_webview_process_elevated :: proc() -> i32 ---
+		cosmos_webview_host_destroy :: proc(host: rawptr) ---
+		cosmos_webview_host_overlay_begin :: proc(host: rawptr, layer, width, height: i32) -> rawptr ---
+		cosmos_webview_host_overlay_present :: proc(host: rawptr, layer: i32) ---
+		cosmos_webview_host_overlay_hide :: proc(host: rawptr, layer: i32) ---
+		cosmos_webview_host_trim :: proc(host: rawptr, count: i32) ---
+		cosmos_webview_host_commit :: proc(host: rawptr) ---
+		cosmos_webview_process_elevated :: proc() -> i32 ---
 
-		aio_webview_env_create :: proc(
+		cosmos_webview_env_create :: proc(
 			user_data_dir: cstring16,
 			wake_hwnd: w.HWND,
 			wake_msg: u32,
@@ -65,18 +65,18 @@ when !AIO_HEADLESS {
 			accel_user: rawptr,
 			out_env: ^rawptr,
 		) -> i32 ---
-		aio_webview_env_destroy :: proc(env: rawptr) ---
+		cosmos_webview_env_destroy :: proc(env: rawptr) ---
 
-		aio_webview_create :: proc(
+		cosmos_webview_create :: proc(
 			env, host: rawptr,
-			pane_id: u32,
+			user_id: u32,
 			initial_url: cstring16,
 			color_scheme: i32,
 			zoom: f64,
 		) -> rawptr ---
-		aio_webview_destroy :: proc(view: rawptr) ---
-		aio_webview_detach_host :: proc(view: rawptr, fallback_hwnd: w.HWND) ---
-		aio_webview_set_placement :: proc(
+		cosmos_webview_destroy :: proc(view: rawptr) ---
+		cosmos_webview_detach_host :: proc(view: rawptr, fallback_hwnd: w.HWND) ---
+		cosmos_webview_set_placement :: proc(
 			view, host: rawptr,
 			visible, level: i32,
 			vis_x, vis_y, vis_w, vis_h: i32,
@@ -84,26 +84,26 @@ when !AIO_HEADLESS {
 			bounds_w, bounds_h: i32,
 			radius_bl, radius_br, raster_scale: f32,
 		) ---
-		aio_webview_set_color_scheme :: proc(view: rawptr, scheme: i32) ---
-		aio_webview_set_zoom :: proc(view: rawptr, zoom: f64) ---
-		aio_webview_navigate :: proc(view: rawptr, url: cstring16) ---
-		aio_webview_go_back :: proc(view: rawptr) ---
-		aio_webview_go_forward :: proc(view: rawptr) ---
-		aio_webview_reload :: proc(view: rawptr) ---
-		aio_webview_stop :: proc(view: rawptr) ---
-		aio_webview_find_start :: proc(view: rawptr, term: cstring16, case_sensitive, whole_word: i32) -> i32 ---
-		aio_webview_find_step :: proc(view: rawptr, backward: i32) ---
-		aio_webview_mouse :: proc(
+		cosmos_webview_set_color_scheme :: proc(view: rawptr, scheme: i32) ---
+		cosmos_webview_set_zoom :: proc(view: rawptr, zoom: f64) ---
+		cosmos_webview_navigate :: proc(view: rawptr, url: cstring16) ---
+		cosmos_webview_go_back :: proc(view: rawptr) ---
+		cosmos_webview_go_forward :: proc(view: rawptr) ---
+		cosmos_webview_reload :: proc(view: rawptr) ---
+		cosmos_webview_stop :: proc(view: rawptr) ---
+		cosmos_webview_find_start :: proc(view: rawptr, term: cstring16, case_sensitive, whole_word: i32) -> i32 ---
+		cosmos_webview_find_step :: proc(view: rawptr, backward: i32) ---
+		cosmos_webview_mouse :: proc(
 			view: rawptr,
 			kind: i32,
 			virtual_keys, mouse_data: u32,
 			local_x, local_y: i32,
 		) ---
-		aio_webview_focus :: proc(view: rawptr) ---
-		aio_webview_parent_moved :: proc(view: rawptr) ---
-		aio_webview_poll :: proc(view: rawptr, out: ^C_Webview_Snapshot) ---
-		aio_webview_clear_new_window :: proc(view: rawptr) ---
-		aio_webview_pop_note :: proc(view: rawptr) ---
+		cosmos_webview_focus :: proc(view: rawptr) ---
+		cosmos_webview_parent_moved :: proc(view: rawptr) ---
+		cosmos_webview_poll :: proc(view: rawptr, out: ^C_Webview_Snapshot) ---
+		cosmos_webview_clear_new_window :: proc(view: rawptr) ---
+		cosmos_webview_pop_note :: proc(view: rawptr) ---
 	}
 
 	// 0 not asked yet, 1 not elevated, 2 elevated.
@@ -112,7 +112,7 @@ when !AIO_HEADLESS {
 
 	// WebView2 runs as the app does, so an elevated app shows web pages in the default browser instead.
 	webview_supported :: proc() -> bool {
-		if process_elevation == 0 {process_elevation = aio_webview_process_elevated() != 0 ? 2 : 1}
+		if process_elevation == 0 {process_elevation = cosmos_webview_process_elevated() != 0 ? 2 : 1}
 		return process_elevation == 1
 	}
 
@@ -138,7 +138,7 @@ when !AIO_HEADLESS {
 		window := find_window(p, id)
 		if window == nil || window.hwnd == nil {return nil, false}
 		host: rawptr
-		hr := aio_webview_host_create(window.hwnd, d3d_device, dxgi_factory, &host)
+		hr := cosmos_webview_host_create(window.hwnd, d3d_device, dxgi_factory, &host)
 		if hr < 0 || host == nil {
 			log.errorf("webview: creating DirectComposition host failed: HRESULT 0x%x", u32(hr))
 			return nil, false
@@ -147,30 +147,30 @@ when !AIO_HEADLESS {
 	}
 
 	webview_host_destroy :: proc(host: Webview_Host) {
-		if host != nil {aio_webview_host_destroy(rawptr(host))}
+		if host != nil {cosmos_webview_host_destroy(rawptr(host))}
 	}
 
 	@(require_results)
 	webview_host_overlay_begin :: proc(host: Webview_Host, layer, width, height: i32) -> rawptr {
 		if host == nil {return nil}
-		return aio_webview_host_overlay_begin(rawptr(host), layer, width, height)
+		return cosmos_webview_host_overlay_begin(rawptr(host), layer, width, height)
 	}
 
 	webview_host_overlay_present :: proc(host: Webview_Host, layer: i32) {
-		if host != nil {aio_webview_host_overlay_present(rawptr(host), layer)}
+		if host != nil {cosmos_webview_host_overlay_present(rawptr(host), layer)}
 	}
 
 	webview_host_overlay_hide :: proc(host: Webview_Host, layer: i32) {
-		if host != nil {aio_webview_host_overlay_hide(rawptr(host), layer)}
+		if host != nil {cosmos_webview_host_overlay_hide(rawptr(host), layer)}
 	}
 
 	// Releases the overlays at `count` and above, which the window's frame no longer draws.
 	webview_host_trim :: proc(host: Webview_Host, count: i32) {
-		if host != nil {aio_webview_host_trim(rawptr(host), count)}
+		if host != nil {cosmos_webview_host_trim(rawptr(host), count)}
 	}
 
 	webview_host_commit :: proc(host: Webview_Host) {
-		if host != nil {aio_webview_host_commit(rawptr(host))}
+		if host != nil {cosmos_webview_host_commit(rawptr(host))}
 	}
 
 	@(require_results)
@@ -189,7 +189,7 @@ when !AIO_HEADLESS {
 			dir_w = w.utf8_to_wstring(user_data_dir, context.temp_allocator)
 		}
 		env: rawptr
-		hr := aio_webview_env_create(dir_w, p.host.hwnd, WEBVIEW_MESSAGE, accel_cb, accel_user, &env)
+		hr := cosmos_webview_env_create(dir_w, p.host.hwnd, WEBVIEW_MESSAGE, accel_cb, accel_user, &env)
 		if hr < 0 || env == nil {
 			log.errorf("webview: creating WebView2 environment failed: HRESULT 0x%x", u32(hr))
 			return nil, false
@@ -198,26 +198,26 @@ when !AIO_HEADLESS {
 	}
 
 	webview_env_destroy :: proc(env: Webview_Env) {
-		if env != nil {aio_webview_env_destroy(rawptr(env))}
+		if env != nil {cosmos_webview_env_destroy(rawptr(env))}
 	}
 
 	@(require_results)
 	webview_create :: proc(
 		env: Webview_Env,
 		host: Webview_Host,
-		pane_id: u32,
+		user_id: u32,
 		initial_url: string,
 		scheme: Webview_Color_Scheme,
 		zoom: f64,
 	) -> Webview {
 		if env == nil || host == nil {return nil}
 		url_w := initial_url != "" ? w.utf8_to_wstring(initial_url, context.temp_allocator) : nil
-		view := aio_webview_create(rawptr(env), rawptr(host), pane_id, url_w, i32(scheme), zoom)
+		view := cosmos_webview_create(rawptr(env), rawptr(host), user_id, url_w, i32(scheme), zoom)
 		return Webview(view)
 	}
 
 	webview_destroy :: proc(view: Webview) {
-		if view != nil {aio_webview_destroy(rawptr(view))}
+		if view != nil {cosmos_webview_destroy(rawptr(view))}
 	}
 
 	// Parks `view` on the app's persistent host HWND before its current window is destroyed,
@@ -225,7 +225,7 @@ when !AIO_HEADLESS {
 	webview_detach_host :: proc(p: ^Platform, view: Webview) {
 		if view == nil {return}
 		fallback := p != nil ? p.host.hwnd : nil
-		aio_webview_detach_host(rawptr(view), fallback)
+		cosmos_webview_detach_host(rawptr(view), fallback)
 	}
 
 	// Places the view's visual at DirectComposition `level`: 0 for tiled panes, above it one per floating
@@ -241,7 +241,7 @@ when !AIO_HEADLESS {
 		radius_bl, radius_br, raster_scale: f32,
 	) {
 		if view == nil {return}
-		aio_webview_set_placement(
+		cosmos_webview_set_placement(
 			rawptr(view),
 			rawptr(host),
 			visible ? 1 : 0,
@@ -263,34 +263,34 @@ when !AIO_HEADLESS {
 	}
 
 	webview_set_color_scheme :: proc(view: Webview, scheme: Webview_Color_Scheme) {
-		if view != nil {aio_webview_set_color_scheme(rawptr(view), i32(scheme))}
+		if view != nil {cosmos_webview_set_color_scheme(rawptr(view), i32(scheme))}
 	}
 
 	webview_set_zoom :: proc(view: Webview, zoom: f64) {
-		if view != nil {aio_webview_set_zoom(rawptr(view), zoom)}
+		if view != nil {cosmos_webview_set_zoom(rawptr(view), zoom)}
 	}
 
 	webview_navigate :: proc(view: Webview, url: string) {
 		if view == nil || url == "" {return}
 		if url_w := w.utf8_to_wstring(url, context.temp_allocator); url_w != nil {
-			aio_webview_navigate(rawptr(view), url_w)
+			cosmos_webview_navigate(rawptr(view), url_w)
 		}
 	}
 
 	webview_go_back :: proc(view: Webview) {
-		if view != nil {aio_webview_go_back(rawptr(view))}
+		if view != nil {cosmos_webview_go_back(rawptr(view))}
 	}
 
 	webview_go_forward :: proc(view: Webview) {
-		if view != nil {aio_webview_go_forward(rawptr(view))}
+		if view != nil {cosmos_webview_go_forward(rawptr(view))}
 	}
 
 	webview_reload :: proc(view: Webview) {
-		if view != nil {aio_webview_reload(rawptr(view))}
+		if view != nil {cosmos_webview_reload(rawptr(view))}
 	}
 
 	webview_stop :: proc(view: Webview) {
-		if view != nil {aio_webview_stop(rawptr(view))}
+		if view != nil {cosmos_webview_stop(rawptr(view))}
 	}
 
 	// Starts a find for `term`, or ends it when empty; false when the runtime has no find API.
@@ -298,11 +298,11 @@ when !AIO_HEADLESS {
 		if view == nil {return false}
 		term_w := w.utf8_to_wstring(term, context.temp_allocator)
 		if term != "" && term_w == nil {return false}
-		return aio_webview_find_start(rawptr(view), term_w, i32(case_sensitive), i32(whole_word)) != 0
+		return cosmos_webview_find_start(rawptr(view), term_w, i32(case_sensitive), i32(whole_word)) != 0
 	}
 
 	webview_find_step :: proc(view: Webview, backward: bool) {
-		if view != nil {aio_webview_find_step(rawptr(view), i32(backward))}
+		if view != nil {cosmos_webview_find_step(rawptr(view), i32(backward))}
 	}
 
 	webview_mouse :: proc(
@@ -320,22 +320,22 @@ when !AIO_HEADLESS {
 		if .Shift in modifiers {vkeys |= 0x0004}
 		if .Control in modifiers {vkeys |= 0x0008}
 		if .Middle in buttons {vkeys |= 0x0010}
-		aio_webview_mouse(rawptr(view), i32(kind), vkeys, mouse_data, local_x, local_y)
+		cosmos_webview_mouse(rawptr(view), i32(kind), vkeys, mouse_data, local_x, local_y)
 	}
 
 	webview_focus :: proc(view: Webview) {
-		if view != nil {aio_webview_focus(rawptr(view))}
+		if view != nil {cosmos_webview_focus(rawptr(view))}
 	}
 
 	webview_parent_moved :: proc(view: Webview) {
-		if view != nil {aio_webview_parent_moved(rawptr(view))}
+		if view != nil {cosmos_webview_parent_moved(rawptr(view))}
 	}
 
 	@(require_results)
 	webview_poll :: proc(view: Webview) -> Webview_Snapshot {
 		if view == nil {return {}}
 		raw: C_Webview_Snapshot
-		aio_webview_poll(rawptr(view), &raw)
+		cosmos_webview_poll(rawptr(view), &raw)
 		text :: proc(bytes: [^]u8, count: i32) -> string {
 			return bytes != nil && count > 0 ? string(bytes[:count]) : ""
 		}
@@ -368,12 +368,12 @@ when !AIO_HEADLESS {
 	}
 
 	webview_clear_new_window :: proc(view: Webview) {
-		if view != nil {aio_webview_clear_new_window(rawptr(view))}
+		if view != nil {cosmos_webview_clear_new_window(rawptr(view))}
 	}
 
 	// Drops the note the last poll reported, so the next poll reports the one after it.
 	webview_pop_note :: proc(view: Webview) {
-		if view != nil {aio_webview_pop_note(rawptr(view))}
+		if view != nil {cosmos_webview_pop_note(rawptr(view))}
 	}
 
 	@(private = "file")

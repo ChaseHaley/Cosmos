@@ -1,6 +1,6 @@
 package platform
 
-import "aio:localpath"
+import "cosmos:winpath"
 import "core:strings"
 import w "core:sys/windows"
 
@@ -15,7 +15,7 @@ open_path_allowed :: proc(path: string) -> bool {
 	for c in path {
 		if c == 0 {return false}
 	}
-	if localpath.is_drive_absolute(path) {return true}
+	if winpath.is_drive_absolute(path) {return true}
 	if strings.has_prefix(path, `\\`) || strings.has_prefix(path, "//") {return false}
 	for c in path {
 		if c == ':' {return false}

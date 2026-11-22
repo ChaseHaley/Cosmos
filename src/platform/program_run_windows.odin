@@ -5,8 +5,8 @@ package platform
 @(require) import w "core:sys/windows"
 @(require) import "core:thread"
 
-// The Win32 backend; a headless build compiles another (see AIO_HEADLESS in platform.odin).
-when !AIO_HEADLESS {
+// The Win32 backend; a headless build compiles another (see HEADLESS in platform.odin).
+when !HEADLESS {
 	// A program run without a window whose exit the app waits for, as Update AIODev waits for its
 	// updater. A thread waits for the process and wakes the loop when it exits.
 	Program_Run :: struct {

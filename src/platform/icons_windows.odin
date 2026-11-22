@@ -6,8 +6,8 @@ package platform
 @(require) foreign import icons_shell32 "system:shell32.lib"
 @(require) foreign import icons_user32 "system:user32.lib"
 
-// The Win32 backend; a headless build compiles another (see AIO_HEADLESS in platform.odin).
-when !AIO_HEADLESS {
+// The Win32 backend; a headless build compiles another (see HEADLESS in platform.odin).
+when !HEADLESS {
 	@(private, default_calling_convention = "system")
 	foreign icons_shell32 {
 		SHDefExtractIconW :: proc(

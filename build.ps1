@@ -38,12 +38,15 @@ switch ($Task) {
         foreach ($name in $sourcePackages) {
             Invoke-Odin check "src/$name" -no-entry-point @flags
         }
+        # The headless platform backend must keep compiling beside the Win32 one.
+        Invoke-Odin check src/platform -no-entry-point '-define:COSMOS_HEADLESS=true' @flags
         foreach ($name in $toolPackages) {
             Invoke-Odin check "tools/$name" @flags
         }
     }
     'test' {
         . "$PSScriptRoot/tools/test-budget.ps1"
+        Build-CosmosNative $PSScriptRoot
         $targets = if ($Package) { @($Package) } else { $testPackages }
         if ($targets.Count -eq 0) { throw 'No test packages found under tests/.' }
         foreach ($name in $targets) {
@@ -55,7 +58,9 @@ switch ($Task) {
             $failed = @()
             foreach ($name in $targets) {
                 $required = if ($TestNames) { $TestNames.Split(',') } else { @() }
-                $run = Invoke-OdinTest "tests/$name" $name $flags $TestNames $required $TestTimeoutSeconds
+                # A package named *_headless tests the headless platform backend.
+                $arguments = if ($name -like '*_headless') { $flags + '-define:COSMOS_HEADLESS=true' } else { $flags }
+                $run = Invoke-OdinTest "tests/$name" $name $arguments $TestNames $required $TestTimeoutSeconds
                 if ($run.Code -ne 0) { $failed += $name }
             }
             if ($failed) {

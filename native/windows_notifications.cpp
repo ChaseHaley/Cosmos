@@ -19,7 +19,17 @@
 using namespace winrt;
 using namespace winrt::Windows::Data::Xml::Dom;
 using namespace winrt::Windows::UI::Notifications;
-constexpr wchar_t APP_ID[] = L"AIODev.ProgramStatus";
+
+// Who Windows names as the sender: the AppUserModelID a Start menu shortcut and a registry entry carry,
+// the display name, the folder under %LOCALAPPDATA% that holds the sender image, and the shortcut's name.
+// An older shortcut is deleted when it still points at this executable.
+struct Identity {
+    std::wstring app_id;
+    std::wstring display_name;
+    std::wstring icon_folder;
+    std::wstring shortcut_name;
+    std::wstring legacy_shortcut_name;
+};
 
 struct Pending_Toast {
     ToastNotification toast{nullptr};
@@ -41,13 +51,14 @@ struct Notification_Sink {
     void post(UINT message, WPARAM value) {
         std::lock_guard lock(mutex);
         if (window && !PostMessageW(window, message, value, 0)) {
-            OutputDebugStringW(L"AIODev notification event delivery failed\n");
+            OutputDebugStringW(L"Notification event delivery failed\n");
         }
     }
 };
 struct Notifications {
     std::shared_ptr<Notification_Sink> window;
     UINT message;
+    std::wstring app_id;
     std::vector<Pending_Toast> pending;
     ~Notifications() {
         if (window) window->close();
@@ -55,7 +66,8 @@ struct Notifications {
     }
 };
 
-static std::wstring notification_icon() {
+// The sender image comes from the executable's RCDATA resource 2, a PNG.
+static std::wstring notification_icon(const std::wstring &folder) {
     // IconUri needs an image file, not an executable containing icon resources.
     auto resource = FindResourceW(nullptr, MAKEINTRESOURCEW(2), MAKEINTRESOURCEW(10));
     check_bool(resource != nullptr);
@@ -69,7 +81,7 @@ static std::wstring notification_icon() {
     check_hresult(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &local));
     std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> owned_local(local, &CoTaskMemFree);
     std::wstring directory(owned_local.get());
-    directory += L"\\AIODev";
+    directory += L"\\" + folder;
     if (!CreateDirectoryW(directory.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
         throw_last_error();
     }
@@ -82,9 +94,9 @@ static std::wstring notification_icon() {
             !existing.bad() && std::memcmp(content.data(), bytes, size) == 0) return path;
     }
     wchar_t temporary[MAX_PATH];
-    check_bool(GetTempFileNameW(directory.c_str(), L"aio", 0, temporary) != 0);
+    check_bool(GetTempFileNameW(directory.c_str(), L"ntf", 0, temporary) != 0);
     auto remove_temporary = [&] {
-        if (!DeleteFileW(temporary)) OutputDebugStringW(L"AIODev temporary notification icon cleanup failed\n");
+        if (!DeleteFileW(temporary)) OutputDebugStringW(L"Temporary notification icon cleanup failed\n");
     };
     auto file = CreateFileW(temporary, GENERIC_WRITE, 0, nullptr,
                             TRUNCATE_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -110,18 +122,19 @@ static std::wstring notification_icon() {
     return path;
 }
 
-static void register_identity() {
+static void register_identity(const Identity &identity) {
     wchar_t exe[32768];
     auto length = GetModuleFileNameW(nullptr, exe, ARRAYSIZE(exe));
     if (!length || length >= ARRAYSIZE(exe)) throw_hresult(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER));
-    auto icon = notification_icon();
-    check_hresult(SetCurrentProcessExplicitAppUserModelID(APP_ID));
+    auto icon = notification_icon(identity.icon_folder);
+    check_hresult(SetCurrentProcessExplicitAppUserModelID(identity.app_id.c_str()));
     HKEY key = nullptr;
-    check_hresult(HRESULT_FROM_WIN32(RegCreateKeyExW(HKEY_CURRENT_USER,
-        L"Software\\Classes\\AppUserModelId\\AIODev.ProgramStatus", 0, nullptr, 0,
+    auto key_path = L"Software\\Classes\\AppUserModelId\\" + identity.app_id;
+    check_hresult(HRESULT_FROM_WIN32(RegCreateKeyExW(HKEY_CURRENT_USER, key_path.c_str(), 0, nullptr, 0,
         KEY_SET_VALUE, nullptr, &key, nullptr)));
     auto name_result = RegSetValueExW(key, L"DisplayName", 0, REG_SZ,
-        reinterpret_cast<const BYTE *>(L"AIODev"), sizeof(L"AIODev"));
+        reinterpret_cast<const BYTE *>(identity.display_name.c_str()),
+        static_cast<DWORD>((identity.display_name.size() + 1) * sizeof(wchar_t)));
     auto icon_result = RegSetValueExW(key, L"IconUri", 0, REG_SZ,
         reinterpret_cast<const BYTE *>(icon.c_str()), static_cast<DWORD>((icon.size() + 1) * sizeof(wchar_t)));
     auto close_result = RegCloseKey(key);
@@ -132,7 +145,7 @@ static void register_identity() {
     check_hresult(SHGetKnownFolderPath(FOLDERID_Programs, 0, nullptr, &programs));
     std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> owned_programs(programs, &CoTaskMemFree);
     std::wstring path(owned_programs.get());
-    path += L"\\AIODev.lnk";
+    path += L"\\" + identity.shortcut_name + L".lnk";
     auto link = create_instance<IShellLinkW>(CLSID_ShellLink);
     check_hresult(link->SetPath(exe));
     check_hresult(link->SetIconLocation(exe, 0));
@@ -142,13 +155,14 @@ static void register_identity() {
     check_hresult(link->SetWorkingDirectory(owned_profile.get()));
     auto properties = link.as<IPropertyStore>();
     PROPVARIANT value{};
-    check_hresult(InitPropVariantFromString(APP_ID, &value));
+    check_hresult(InitPropVariantFromString(identity.app_id.c_str(), &value));
     auto result = properties->SetValue(PKEY_AppUserModel_ID, value);
     check_hresult(PropVariantClear(&value));
     check_hresult(result);
     check_hresult(properties->Commit());
     check_hresult(link.as<IPersistFile>()->Save(path.c_str(), TRUE));
-    auto legacy = std::wstring(owned_programs.get()) + L"\\AIODev Notifications.lnk";
+    if (identity.legacy_shortcut_name.empty()) return;
+    auto legacy = std::wstring(owned_programs.get()) + L"\\" + identity.legacy_shortcut_name + L".lnk";
     if (GetFileAttributesW(legacy.c_str()) != INVALID_FILE_ATTRIBUTES) {
         auto old_link = create_instance<IShellLinkW>(CLSID_ShellLink);
         if (SUCCEEDED(old_link.as<IPersistFile>()->Load(legacy.c_str(), STGM_READ))) {
@@ -161,28 +175,35 @@ static void register_identity() {
     }
 }
 
-extern "C" HRESULT aio_notifications_create(HWND window, UINT message, void **out) noexcept {
+extern "C" HRESULT cosmos_notifications_create(
+    HWND window, UINT message, const wchar_t *app_id, const wchar_t *display_name, const wchar_t *icon_folder,
+    const wchar_t *shortcut_name, const wchar_t *legacy_shortcut_name, void **out) noexcept {
     *out = nullptr;
     try {
+        // Odin passes an empty string as a null pointer.
+        auto text = [](const wchar_t *s) { return std::wstring(s ? s : L""); };
+        Identity identity{text(app_id), text(display_name), text(icon_folder), text(shortcut_name),
+                          text(legacy_shortcut_name)};
         check_hresult(RoInitialize(RO_INIT_SINGLETHREADED));
         try {
-            register_identity();
+            register_identity(identity);
             auto state = std::make_unique<Notifications>();
             state->window = std::make_shared<Notification_Sink>(window);
             state->message = message;
+            state->app_id = identity.app_id;
             *out = state.release();
         } catch (...) { RoUninitialize(); throw; }
         return S_OK;
     } catch (...) { return to_hresult(); }
 }
 
-extern "C" void aio_notifications_destroy(void *state) noexcept {
+extern "C" void cosmos_notifications_destroy(void *state) noexcept {
     if (!state) return;
     delete static_cast<Notifications *>(state);
     RoUninitialize();
 }
 
-extern "C" HRESULT aio_notifications_show(
+extern "C" HRESULT cosmos_notifications_show(
     void *context, const wchar_t *title, const wchar_t *text, UINT token, bool sound,
     const char **operation) noexcept {
     *operation = "prepare";
@@ -225,7 +246,7 @@ extern "C" HRESULT aio_notifications_show(
         });
         items.push_back(std::move(item));
         *operation = "create notifier";
-        auto notifier = ToastNotificationManager::CreateToastNotifier(APP_ID);
+        auto notifier = ToastNotificationManager::CreateToastNotifier(state.app_id);
         *operation = "show toast";
         notifier.Show(items.back().toast);
         return S_OK;

@@ -2,7 +2,7 @@ package platform
 
 @(require) import "cosmos:input"
 
-when AIO_HEADLESS {
+when HEADLESS {
 	webview_supported :: proc() -> bool {
 		return false
 	}
@@ -52,7 +52,7 @@ when AIO_HEADLESS {
 	webview_create :: proc(
 		env: Webview_Env,
 		host: Webview_Host,
-		pane_id: u32,
+		user_id: u32,
 		initial_url: string,
 		scheme: Webview_Color_Scheme,
 		zoom: f64,

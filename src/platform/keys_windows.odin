@@ -3,8 +3,8 @@ package platform
 @(require) import "core:log"
 @(require) import w "core:sys/windows"
 
-// The Win32 backend; a headless build compiles another (see AIO_HEADLESS in platform.odin).
-when !AIO_HEADLESS {
+// The Win32 backend; a headless build compiles another (see HEADLESS in platform.odin).
+when !HEADLESS {
 	// The user's keyboard layout, which synthesize_key types with.
 	@(private, require_results)
 	keyboard_layout :: proc() -> (HKL, bool) {

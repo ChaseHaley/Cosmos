@@ -212,7 +212,7 @@ struct Overlay_Layer {
 // One window's DirectComposition tree. Above the HWND's own flip-model swap chain the levels stack bottom
 // to top as web_roots[0], overlays[0], web_roots[1], overlays[1], ... Level 0 holds tiled web views; each
 // floating group with a web view gets the next level, so a float drawn later (in a higher overlay) covers it.
-struct Aio_Webview_Host {
+struct Cosmos_Webview_Host {
     HWND hwnd = nullptr;
     Com_Ptr<ID3D11Device> d3d;
     Com_Ptr<ID3D11DeviceContext> ctx;
@@ -225,7 +225,7 @@ struct Aio_Webview_Host {
 };
 
 // Grows the host to `count` levels; existing levels keep their order and contents.
-static bool host_ensure_levels(Aio_Webview_Host *host, size_t count) {
+static bool host_ensure_levels(Cosmos_Webview_Host *host, size_t count) {
     while (host->web_roots.size() < count) {
         Com_Ptr<IDCompositionVisual> web;
         Overlay_Layer layer;
@@ -243,7 +243,7 @@ static bool host_ensure_levels(Aio_Webview_Host *host, size_t count) {
     return true;
 }
 
-static void overlay_release(Aio_Webview_Host *host, Overlay_Layer &layer) {
+static void overlay_release(Cosmos_Webview_Host *host, Overlay_Layer &layer) {
     if (layer.visual) layer.visual->SetContent(nullptr);
     layer.attached = false;
     layer.rtv.reset();
@@ -256,11 +256,11 @@ static void overlay_release(Aio_Webview_Host *host, Overlay_Layer &layer) {
     layer.height = 0;
 }
 
-using Accel_Callback = bool (*)(void *user, uint32_t pane_id, uint32_t vk, uint32_t kind, int32_t lparam);
+using Accel_Callback = bool (*)(void *user, uint32_t user_id, uint32_t vk, uint32_t kind, int32_t lparam);
 
-struct Aio_Webview;
+struct Cosmos_Webview;
 
-struct Aio_Webview_Env {
+struct Cosmos_Webview_Env {
     Com_Ptr<ICoreWebView2Environment> env;
     Com_Ptr<ICoreWebView2Environment3> env3;
     Com_Ptr<ICoreWebView2Environment15> env15;
@@ -271,7 +271,7 @@ struct Aio_Webview_Env {
     bool ready = false;
     bool failed = false;
     HRESULT error_hr = S_OK;
-    std::vector<Aio_Webview *> pending;
+    std::vector<Cosmos_Webview *> pending;
     std::shared_ptr<std::atomic_bool> alive = std::make_shared<std::atomic_bool>(true);
 
     void wake() const {
@@ -303,10 +303,10 @@ enum Crash_Kind : uint8_t {
     CRASH_UNRESPONSIVE = 3,
 };
 
-struct Aio_Webview {
-    Aio_Webview_Env *env = nullptr;
-    Aio_Webview_Host *host = nullptr;
-    uint32_t pane_id = 0;
+struct Cosmos_Webview {
+    Cosmos_Webview_Env *env = nullptr;
+    Cosmos_Webview_Host *host = nullptr;
+    uint32_t user_id = 0;
     std::shared_ptr<std::atomic_bool> alive = std::make_shared<std::atomic_bool>(true);
 
     Com_Ptr<ICoreWebView2CompositionController> comp;
@@ -318,7 +318,7 @@ struct Aio_Webview {
     Com_Ptr<ICoreWebView2Find> find;
     Com_Ptr<IDCompositionVisual> visual;
     Com_Ptr<IDCompositionRectangleClip> clip;
-    Aio_Webview_Host *visual_host = nullptr;
+    Cosmos_Webview_Host *visual_host = nullptr;
     bool visual_attached = false;
     int visual_level = 0;
 
@@ -364,7 +364,7 @@ struct Aio_Webview {
     }
 };
 
-static void detach_visual(Aio_Webview *v) {
+static void detach_visual(Cosmos_Webview *v) {
     if (!v->visual_attached || !v->visual_host || !v->visual) return;
     auto &roots = v->visual_host->web_roots;
     if (v->visual_level >= 0 && static_cast<size_t>(v->visual_level) < roots.size()) {
@@ -373,7 +373,7 @@ static void detach_visual(Aio_Webview *v) {
     v->visual_attached = false;
 }
 
-static void ensure_visual_for_host(Aio_Webview *v, Aio_Webview_Host *host) {
+static void ensure_visual_for_host(Cosmos_Webview *v, Cosmos_Webview_Host *host) {
     if (!v || !host || !v->comp) return;
     if (v->visual_host != host) {
         auto *old_host = v->visual_host;
@@ -400,7 +400,7 @@ static void ensure_visual_for_host(Aio_Webview *v, Aio_Webview_Host *host) {
     }
 }
 
-static void apply_color_scheme(Aio_Webview *v) {
+static void apply_color_scheme(Cosmos_Webview *v) {
     if (!v->webview13) return;
     Com_Ptr<ICoreWebView2Profile> profile;
     if (SUCCEEDED(v->webview13->get_Profile(profile.put())) && profile) {
@@ -408,7 +408,7 @@ static void apply_color_scheme(Aio_Webview *v) {
     }
 }
 
-static void apply_placement(Aio_Webview *v) {
+static void apply_placement(Cosmos_Webview *v) {
     if (!v || !v->ready || !v->controller || !v->comp) return;
     // Hidden views still need to leave their old host before that window can be destroyed.
     if (v->host) ensure_visual_for_host(v, v->host);
@@ -462,7 +462,7 @@ static void apply_placement(Aio_Webview *v) {
     v->controller->put_IsVisible(TRUE);
 }
 
-static void refresh_webview_state(Aio_Webview *v) {
+static void refresh_webview_state(Cosmos_Webview *v) {
     if (!v || !v->webview) return;
     LPWSTR uri = nullptr;
     if (SUCCEEDED(v->webview->get_Source(&uri)) && uri) {
@@ -480,7 +480,7 @@ static void refresh_webview_state(Aio_Webview *v) {
     v->changed();
 }
 
-static void refresh_find_state(Aio_Webview *v) {
+static void refresh_find_state(Cosmos_Webview *v) {
     if (!v->find) return;
     INT32 count = 0, index = -1;
     if (SUCCEEDED(v->find->get_MatchCount(&count))) v->find_count = count;
@@ -505,7 +505,7 @@ static std::vector<uint8_t> read_stream(IStream *stream) {
     return out;
 }
 
-static void request_favicon(Aio_Webview *v) {
+static void request_favicon(Cosmos_Webview *v) {
     if (!v->webview15) return;
     LPWSTR uri = nullptr;
     bool has_icon = SUCCEEDED(v->webview15->get_FaviconUri(&uri)) && uri && uri[0];
@@ -528,7 +528,7 @@ static void request_favicon(Aio_Webview *v) {
         }).get());
 }
 
-static void on_download_state(Aio_Webview *v, ICoreWebView2DownloadOperation *op) {
+static void on_download_state(Cosmos_Webview *v, ICoreWebView2DownloadOperation *op) {
     COREWEBVIEW2_DOWNLOAD_STATE state = COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS;
     if (!op || FAILED(op->get_State(&state)) || state == COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS) return;
     LPWSTR path = nullptr;
@@ -548,7 +548,7 @@ static void on_download_state(Aio_Webview *v, ICoreWebView2DownloadOperation *op
 
 // Subscribes to the page's events once its controller exists. Every handler checks `alive` first: the
 // view may have been destroyed while WebView2 still held a queued callback.
-static void register_events(Aio_Webview *v) {
+static void register_events(Cosmos_Webview *v) {
     auto alive = v->alive;
     EventRegistrationToken tok{};
     v->webview->add_NavigationStarting(
@@ -768,7 +768,7 @@ static void register_events(Aio_Webview *v) {
             args->get_VirtualKey(&vk);
             args->get_KeyEventKind(&kind);
             args->get_KeyEventLParam(&lparam);
-            if (v->env->accel_cb(v->env->accel_user, v->pane_id, static_cast<uint32_t>(vk),
+            if (v->env->accel_cb(v->env->accel_user, v->user_id, static_cast<uint32_t>(vk),
                                  static_cast<uint32_t>(kind), static_cast<int32_t>(lparam))) {
                 args->put_Handled(TRUE);
             }
@@ -777,7 +777,7 @@ static void register_events(Aio_Webview *v) {
         &tok);
 }
 
-static void start_controller_creation(Aio_Webview *v) {
+static void start_controller_creation(Cosmos_Webview *v) {
     if (!v || !v->env || !v->env->ready || !v->env->env3 || !v->host || v->creating || v->ready) return;
     v->creating = true;
     auto alive = v->alive;
@@ -862,7 +862,7 @@ static void start_controller_creation(Aio_Webview *v) {
 }
 
 // The find session, created on first use with its count and position handlers.
-static ICoreWebView2Find *find_session(Aio_Webview *v) {
+static ICoreWebView2Find *find_session(Cosmos_Webview *v) {
     if (v->find) return v->find.get();
     if (!v->webview) return nullptr;
     Com_Ptr<ICoreWebView2_28> webview28;
@@ -885,7 +885,7 @@ static ICoreWebView2Find *find_session(Aio_Webview *v) {
     return v->find.get();
 }
 
-static bool overlay_ensure(Aio_Webview_Host *host, Overlay_Layer &layer, int width, int height) {
+static bool overlay_ensure(Cosmos_Webview_Host *host, Overlay_Layer &layer, int width, int height) {
     if (width <= 0 || height <= 0) return false;
     if (layer.chain && layer.rtv && layer.width == width && layer.height == height) {
         if (!layer.attached && layer.visual) {
@@ -936,7 +936,7 @@ static bool overlay_ensure(Aio_Webview_Host *host, Overlay_Layer &layer, int wid
 
 } // namespace
 
-struct Aio_Webview_Snapshot {
+struct Cosmos_Webview_Snapshot {
     const char *url;
     int url_len;
     const char *title;
@@ -968,7 +968,7 @@ extern "C" {
 
 // True when this process runs with an elevated token. WebView2 would then run elevated too, so the app
 // opens links in the default browser instead.
-int aio_webview_process_elevated(void) noexcept {
+int cosmos_webview_process_elevated(void) noexcept {
     HANDLE token = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return 0;
     TOKEN_ELEVATION elevation{};
@@ -978,11 +978,11 @@ int aio_webview_process_elevated(void) noexcept {
     return ok && elevation.TokenIsElevated ? 1 : 0;
 }
 
-HRESULT aio_webview_host_create(HWND hwnd, ID3D11Device *d3d_device, IDXGIFactory2 *dxgi_factory,
+HRESULT cosmos_webview_host_create(HWND hwnd, ID3D11Device *d3d_device, IDXGIFactory2 *dxgi_factory,
                                 void **out_host) noexcept {
     if (!hwnd || !d3d_device || !dxgi_factory || !out_host) return E_INVALIDARG;
     *out_host = nullptr;
-    auto host = std::make_unique<Aio_Webview_Host>();
+    auto host = std::make_unique<Cosmos_Webview_Host>();
     host->hwnd = hwnd;
     d3d_device->AddRef();
     *host->d3d.put() = d3d_device;
@@ -1009,35 +1009,35 @@ HRESULT aio_webview_host_create(HWND hwnd, ID3D11Device *d3d_device, IDXGIFactor
     return S_OK;
 }
 
-void aio_webview_host_destroy(void *raw) noexcept {
+void cosmos_webview_host_destroy(void *raw) noexcept {
     if (!raw) return;
-    auto *host = static_cast<Aio_Webview_Host *>(raw);
+    auto *host = static_cast<Cosmos_Webview_Host *>(raw);
     for (auto &layer : host->overlays) overlay_release(host, layer);
     if (host->dcomp) host->dcomp->Commit();
     delete host;
 }
 
-ID3D11RenderTargetView *aio_webview_host_overlay_begin(void *raw, int layer_index, int width,
+ID3D11RenderTargetView *cosmos_webview_host_overlay_begin(void *raw, int layer_index, int width,
                                                        int height) noexcept {
     if (!raw || layer_index < 0) return nullptr;
-    auto *host = static_cast<Aio_Webview_Host *>(raw);
+    auto *host = static_cast<Cosmos_Webview_Host *>(raw);
     if (!host_ensure_levels(host, static_cast<size_t>(layer_index) + 1)) return nullptr;
     auto &layer = host->overlays[static_cast<size_t>(layer_index)];
     if (!overlay_ensure(host, layer, width, height)) return nullptr;
     return layer.rtv.get();
 }
 
-void aio_webview_host_overlay_present(void *raw, int layer_index) noexcept {
+void cosmos_webview_host_overlay_present(void *raw, int layer_index) noexcept {
     if (!raw || layer_index < 0) return;
-    auto *host = static_cast<Aio_Webview_Host *>(raw);
+    auto *host = static_cast<Cosmos_Webview_Host *>(raw);
     if (static_cast<size_t>(layer_index) >= host->overlays.size()) return;
     auto &layer = host->overlays[static_cast<size_t>(layer_index)];
     if (layer.chain) layer.chain->Present(0, 0);
 }
 
-void aio_webview_host_overlay_hide(void *raw, int layer_index) noexcept {
+void cosmos_webview_host_overlay_hide(void *raw, int layer_index) noexcept {
     if (!raw || layer_index < 0) return;
-    auto *host = static_cast<Aio_Webview_Host *>(raw);
+    auto *host = static_cast<Cosmos_Webview_Host *>(raw);
     if (static_cast<size_t>(layer_index) >= host->overlays.size()) return;
     auto &layer = host->overlays[static_cast<size_t>(layer_index)];
     if (layer.attached && layer.visual) {
@@ -1047,25 +1047,25 @@ void aio_webview_host_overlay_hide(void *raw, int layer_index) noexcept {
 }
 
 // Releases the swap chains of overlays at `count` and above, which the frame no longer uses.
-void aio_webview_host_trim(void *raw, int count) noexcept {
+void cosmos_webview_host_trim(void *raw, int count) noexcept {
     if (!raw) return;
-    auto *host = static_cast<Aio_Webview_Host *>(raw);
+    auto *host = static_cast<Cosmos_Webview_Host *>(raw);
     for (size_t i = static_cast<size_t>(count > 1 ? count : 1); i < host->overlays.size(); i += 1) {
         if (host->overlays[i].chain) overlay_release(host, host->overlays[i]);
     }
 }
 
-void aio_webview_host_commit(void *raw) noexcept {
+void cosmos_webview_host_commit(void *raw) noexcept {
     if (!raw) return;
-    auto *host = static_cast<Aio_Webview_Host *>(raw);
+    auto *host = static_cast<Cosmos_Webview_Host *>(raw);
     if (host->dcomp) host->dcomp->Commit();
 }
 
-HRESULT aio_webview_env_create(const wchar_t *user_data_dir, HWND wake_hwnd, UINT wake_msg,
+HRESULT cosmos_webview_env_create(const wchar_t *user_data_dir, HWND wake_hwnd, UINT wake_msg,
                                Accel_Callback accel_cb, void *accel_user, void **out_env) noexcept {
     if (!out_env) return E_INVALIDARG;
     *out_env = nullptr;
-    auto env = std::make_unique<Aio_Webview_Env>();
+    auto env = std::make_unique<Cosmos_Webview_Env>();
     env->wake_hwnd = wake_hwnd;
     env->wake_msg = wake_msg;
     env->accel_cb = accel_cb;
@@ -1115,23 +1115,23 @@ HRESULT aio_webview_env_create(const wchar_t *user_data_dir, HWND wake_hwnd, UIN
     return S_OK;
 }
 
-void aio_webview_env_destroy(void *raw) noexcept {
+void cosmos_webview_env_destroy(void *raw) noexcept {
     if (!raw) return;
-    auto *env = static_cast<Aio_Webview_Env *>(raw);
+    auto *env = static_cast<Cosmos_Webview_Env *>(raw);
     env->alive->store(false);
     env->pending.clear();
     delete env;
 }
 
-void *aio_webview_create(void *raw_env, void *raw_host, uint32_t pane_id, const wchar_t *initial_url,
+void *cosmos_webview_create(void *raw_env, void *raw_host, uint32_t user_id, const wchar_t *initial_url,
                          int color_scheme, double zoom) noexcept {
     if (!raw_env || !raw_host) return nullptr;
-    auto *env = static_cast<Aio_Webview_Env *>(raw_env);
-    auto *host = static_cast<Aio_Webview_Host *>(raw_host);
-    auto v = std::make_unique<Aio_Webview>();
+    auto *env = static_cast<Cosmos_Webview_Env *>(raw_env);
+    auto *host = static_cast<Cosmos_Webview_Host *>(raw_host);
+    auto v = std::make_unique<Cosmos_Webview>();
     v->env = env;
     v->host = host;
-    v->pane_id = pane_id;
+    v->user_id = user_id;
     v->color_scheme = static_cast<COREWEBVIEW2_PREFERRED_COLOR_SCHEME>(color_scheme);
     v->zoom = zoom > 0.0 ? zoom : 1.0;
     if (initial_url && initial_url[0]) {
@@ -1150,9 +1150,9 @@ void *aio_webview_create(void *raw_env, void *raw_host, uint32_t pane_id, const 
     return ptr;
 }
 
-void aio_webview_destroy(void *raw) noexcept {
+void cosmos_webview_destroy(void *raw) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     v->alive->store(false);
     if (v->env) {
         auto &p = v->env->pending;
@@ -1169,9 +1169,9 @@ void aio_webview_destroy(void *raw) noexcept {
     delete v;
 }
 
-void aio_webview_detach_host(void *raw, HWND fallback_hwnd) noexcept {
+void cosmos_webview_detach_host(void *raw, HWND fallback_hwnd) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     auto *old_host = v->visual_host;
     detach_visual(v);
     if (v->comp) v->comp->put_RootVisualTarget(nullptr);
@@ -1192,13 +1192,13 @@ void aio_webview_detach_host(void *raw, HWND fallback_hwnd) noexcept {
     if (old_host && old_host->dcomp) old_host->dcomp->Commit();
 }
 
-void aio_webview_set_placement(void *raw, void *raw_host, int visible, int level, int vis_x, int vis_y,
+void cosmos_webview_set_placement(void *raw, void *raw_host, int visible, int level, int vis_x, int vis_y,
                                int vis_w, int vis_h, float clip_l, float clip_t, float clip_r, float clip_b,
                                int bounds_w, int bounds_h, float radius_bl, float radius_br,
                                float raster_scale) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
-    auto *host = static_cast<Aio_Webview_Host *>(raw_host);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
+    auto *host = static_cast<Cosmos_Webview_Host *>(raw_host);
     bool host_changed = (v->host != host);
     v->host = host;
     v->visible = (visible != 0);
@@ -1227,25 +1227,25 @@ void aio_webview_set_placement(void *raw, void *raw_host, int visible, int level
 }
 
 // 0 follows the system, 1 asks pages for their light look, 2 for their dark look.
-void aio_webview_set_color_scheme(void *raw, int scheme) noexcept {
+void cosmos_webview_set_color_scheme(void *raw, int scheme) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     auto value = static_cast<COREWEBVIEW2_PREFERRED_COLOR_SCHEME>(scheme);
     if (v->color_scheme == value) return;
     v->color_scheme = value;
     apply_color_scheme(v);
 }
 
-void aio_webview_set_zoom(void *raw, double zoom) noexcept {
+void cosmos_webview_set_zoom(void *raw, double zoom) noexcept {
     if (!raw || zoom <= 0.0) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     v->zoom = zoom;
     if (v->controller) v->controller->put_ZoomFactor(zoom);
 }
 
-void aio_webview_navigate(void *raw, const wchar_t *url) noexcept {
+void cosmos_webview_navigate(void *raw, const wchar_t *url) noexcept {
     if (!raw || !url || !url_allowed(url)) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     if (v->webview) {
         v->webview->Navigate(url);
     } else {
@@ -1254,37 +1254,37 @@ void aio_webview_navigate(void *raw, const wchar_t *url) noexcept {
     }
 }
 
-void aio_webview_go_back(void *raw) noexcept {
+void cosmos_webview_go_back(void *raw) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     if (v->webview) v->webview->GoBack();
 }
 
-void aio_webview_go_forward(void *raw) noexcept {
+void cosmos_webview_go_forward(void *raw) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     if (v->webview) v->webview->GoForward();
 }
 
-void aio_webview_reload(void *raw) noexcept {
+void cosmos_webview_reload(void *raw) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     if (v->crashed != CRASH_BROWSER) v->crashed = CRASH_NONE;
     if (v->webview) v->webview->Reload();
     v->changed();
 }
 
-void aio_webview_stop(void *raw) noexcept {
+void cosmos_webview_stop(void *raw) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     if (v->webview) v->webview->Stop();
 }
 
 // Starts or restarts a find for `term`; an empty term ends the session. Edge's own find bar stays hidden:
 // the app's find bar shows the count from find_count and find_index.
-int aio_webview_find_start(void *raw, const wchar_t *term, int case_sensitive, int whole_word) noexcept {
+int cosmos_webview_find_start(void *raw, const wchar_t *term, int case_sensitive, int whole_word) noexcept {
     if (!raw) return 0;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     ICoreWebView2Find *find = find_session(v);
     if (!find || !v->env || !v->env->env15) return 0;
     if (!term || !term[0]) {
@@ -1309,9 +1309,9 @@ int aio_webview_find_start(void *raw, const wchar_t *term, int case_sensitive, i
     return SUCCEEDED(hr) ? 1 : 0;
 }
 
-void aio_webview_find_step(void *raw, int backward) noexcept {
+void cosmos_webview_find_step(void *raw, int backward) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     if (!v->find) return;
     if (backward) {
         v->find->FindPrevious();
@@ -1320,38 +1320,38 @@ void aio_webview_find_step(void *raw, int backward) noexcept {
     }
 }
 
-void aio_webview_mouse(void *raw, int kind, uint32_t virtual_keys, uint32_t mouse_data, int local_x,
+void cosmos_webview_mouse(void *raw, int kind, uint32_t virtual_keys, uint32_t mouse_data, int local_x,
                        int local_y) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     if (!v->comp || !v->ready) return;
     POINT pt{local_x, local_y};
     v->comp->SendMouseInput(static_cast<COREWEBVIEW2_MOUSE_EVENT_KIND>(kind),
                             static_cast<COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS>(virtual_keys), mouse_data, pt);
 }
 
-void aio_webview_focus(void *raw) noexcept {
+void cosmos_webview_focus(void *raw) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     if (v->controller && v->ready) {
         v->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
     }
 }
 
-void aio_webview_parent_moved(void *raw) noexcept {
+void cosmos_webview_parent_moved(void *raw) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     if (v->controller && v->ready) {
         v->controller->NotifyParentWindowPositionChanged();
     }
 }
 
 // Fills `out` with views of the view's strings; they stay valid until the next call that changes the view.
-void aio_webview_poll(void *raw, Aio_Webview_Snapshot *out) noexcept {
+void cosmos_webview_poll(void *raw, Cosmos_Webview_Snapshot *out) noexcept {
     if (!out) return;
     std::memset(out, 0, sizeof(*out));
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     out->url = v->url_utf8.c_str();
     out->url_len = static_cast<int>(v->url_utf8.size());
     out->title = v->title_utf8.c_str();
@@ -1383,15 +1383,15 @@ void aio_webview_poll(void *raw, Aio_Webview_Snapshot *out) noexcept {
     v->state_dirty = false;
 }
 
-void aio_webview_clear_new_window(void *raw) noexcept {
+void cosmos_webview_clear_new_window(void *raw) noexcept {
     if (!raw) return;
-    static_cast<Aio_Webview *>(raw)->new_window_url_utf8.clear();
+    static_cast<Cosmos_Webview *>(raw)->new_window_url_utf8.clear();
 }
 
 // Drops the note the last poll reported.
-void aio_webview_pop_note(void *raw) noexcept {
+void cosmos_webview_pop_note(void *raw) noexcept {
     if (!raw) return;
-    auto *v = static_cast<Aio_Webview *>(raw);
+    auto *v = static_cast<Cosmos_Webview *>(raw);
     if (v->notes.empty()) return;
     v->notes.pop_front();
     // The next poll reports the note after it.

@@ -11,13 +11,13 @@ package platform
 // moving over the window (Files_Drag_Event) and then the drop (Files_Drop_Event). The calls arrive on the
 // UI thread, inside the message dispatch of poll_events, and only add events to the queue: the main loop
 // owns every decision. The target answers DROPEFFECT_COPY for files and nothing for any other data.
-when !AIO_HEADLESS {
+when !HEADLESS {
 	DROPEFFECT_NONE :: 0
 	DROPEFFECT_COPY :: 1
 	TYMED_HGLOBAL :: 1
 	DVASPECT_CONTENT :: 1
 
-	// The longest path a drop carries: the app's local path checks admit nothing longer (localpath).
+	// The longest path a drop carries; longer names are dropped rather than truncated.
 	@(private)
 	DROP_PATH_MAX :: 4096
 

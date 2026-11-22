@@ -3,7 +3,7 @@ package platform_test
 import "core:os"
 import "core:strings"
 import "core:testing"
-import p "aio:platform"
+import p "cosmos:platform"
 
 @(test)
 local_file_within_limit_refuses_directories_devices_and_large_files :: proc(t: ^testing.T) {

@@ -1,10 +1,10 @@
-package headless_test
+package platform_headless_test
 
 import "core:fmt"
 import "core:os"
 import "core:testing"
 import "cosmos:input"
-import "aio:platform"
+import "cosmos:platform"
 
 @(private = "file")
 platform_open :: proc(t: ^testing.T, p: ^platform.Platform, name: string) -> bool {

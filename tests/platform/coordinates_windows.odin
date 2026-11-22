@@ -3,7 +3,7 @@ package platform_test
 import "cosmos:input"
 import "core:testing"
 import w "core:sys/windows"
-import p "aio:platform"
+import p "cosmos:platform"
 
 @(test)
 window_coordinate_round_trip_and_outer_position :: proc(t: ^testing.T) {

@@ -1,7 +1,7 @@
 package platform_test
 
 import "base:runtime"
-import p "aio:platform"
+import p "cosmos:platform"
 import "core:testing"
 
 Fail_Allocator :: struct { backing: runtime.Allocator, remaining: int }

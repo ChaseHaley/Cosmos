@@ -3,7 +3,7 @@ package platform_test
 import "core:fmt"
 import "core:os"
 import "core:testing"
-import p "aio:platform"
+import p "cosmos:platform"
 
 @(test)
 instance_running_lifecycle :: proc(t: ^testing.T) {

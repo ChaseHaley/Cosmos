@@ -11,8 +11,8 @@ package platform
 @(require) foreign import pick_shell32 "system:shell32.lib"
 @(require) foreign import pick_ole32 "system:ole32.lib"
 
-// The Win32 backend; a headless build compiles another (see AIO_HEADLESS in platform.odin).
-when !AIO_HEADLESS {
+// The Win32 backend; a headless build compiles another (see HEADLESS in platform.odin).
+when !HEADLESS {
 	@(default_calling_convention = "system", private)
 	foreign pick_user32 {
 		EnumThreadWindows :: proc(

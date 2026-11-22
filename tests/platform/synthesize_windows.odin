@@ -1,7 +1,7 @@
 package platform_test
 
 import "cosmos:input"
-import p "aio:platform"
+import p "cosmos:platform"
 import "core:testing"
 import w "core:sys/windows"
 

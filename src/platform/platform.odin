@@ -3,9 +3,9 @@ package platform
 import "cosmos:input"
 
 // Chooses the backend at compile time: the Win32 one (`*_windows.odin`), or with
-// -define:AIO_HEADLESS=true one that opens no window (WORK-349). Each backend file wraps its
+// -define:COSMOS_HEADLESS=true one that opens no window (WORK-349). Each backend file wraps its
 // declarations in `when`, so release builds hold only the Win32 code and dispatch nothing at run time.
-AIO_HEADLESS :: #config(AIO_HEADLESS, false)
+HEADLESS :: #config(COSMOS_HEADLESS, false)
 
 Init_Result :: enum {
 	Failed,
@@ -47,6 +47,17 @@ Window_Placement :: struct {
 }
 // Names the target a notification click reports back; 0 means no target.
 Notification_Token :: distinct u32
+// Who Windows names as a notification's sender. The first notification_show registers it: the
+// AppUserModelID on a Start menu shortcut to this executable and under HKCU\Software\Classes, with the
+// display name and a sender image written from the executable's RCDATA resource 2 (a PNG) into the folder
+// named here under %LOCALAPPDATA%. A legacy shortcut, when named, is deleted if it still points here.
+Notification_Identity :: struct {
+	app_user_model_id:    string,
+	display_name:         string,
+	icon_folder:          string,
+	shortcut_name:        string,
+	legacy_shortcut_name: string,
+}
 // Taskbar button progress. Paused and Error tint the bar; Indeterminate has no value.
 Progress_State :: enum {
 	None,
@@ -179,7 +190,7 @@ Webview_Mouse_Kind :: enum i32 {
 
 Webview_Accel_Proc :: proc "c"(
 	user: rawptr,
-	pane_id: u32,
+	user_id: u32,
 	vk: u32,
 	kind: u32,
 	lparam: i32,

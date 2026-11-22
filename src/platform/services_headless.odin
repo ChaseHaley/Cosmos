@@ -1,7 +1,7 @@
 package platform
 
 @(require) import "cosmos:input"
-@(require) import "aio:links"
+@(require) import "cosmos:weburl"
 @(require) import "base:runtime"
 @(require) import "core:log"
 @(require) import "core:strings"
@@ -9,7 +9,7 @@ package platform
 // The headless backend's operating system services. Each records what the app asked for in
 // Platform.record, scripted inputs come from the Platform, and nothing reaches the real desktop:
 // no tray icon, notification, browser, clipboard or dialog.
-when AIO_HEADLESS {
+when HEADLESS {
 	EXECUTABLE_ICON_MAX :: 256
 	// The colour every executable icon reads as, premultiplied RGBA.
 	HEADLESS_ICON :: [4]u8{0x30, 0x60, 0xc0, 0xff}
@@ -63,9 +63,11 @@ when AIO_HEADLESS {
 		return record_notification(p, title, text, token, true, sound)
 	}
 
+	// Records the notification; nothing registers the identity.
 	@(require_results)
 	notification_show :: proc(
 		p: ^Platform,
+		_: Notification_Identity,
 		title, text: string,
 		token: Notification_Token,
 		sound: bool,
@@ -147,7 +149,7 @@ when AIO_HEADLESS {
 
 	@(require_results)
 	open_url :: proc(uri: string) -> bool {
-		if !links.allowed(uri) {
+		if !weburl.allowed(uri) {
 			log.warnf("platform: refusing to open a non-web target")
 			return false
 		}
@@ -285,11 +287,6 @@ when AIO_HEADLESS {
 			copy(pixels[i * 4:], color[:])
 		}
 		return true
-	}
-
-	// No distributions: detection reads nothing from the machine.
-	wsl_distributions :: proc(allocator := context.allocator) -> ([]string, runtime.Allocator_Error) {
-		return nil, nil
 	}
 
 	@(require_results)

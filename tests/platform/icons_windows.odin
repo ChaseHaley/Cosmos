@@ -1,6 +1,6 @@
 package platform_test
 
-import p "aio:platform"
+import p "cosmos:platform"
 import "core:os"
 import "core:strings"
 import "core:testing"
