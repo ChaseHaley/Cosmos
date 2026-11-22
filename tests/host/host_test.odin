@@ -113,3 +113,29 @@ deadlines_fold_to_the_earliest_and_round_the_wait_up :: proc(t: ^testing.T) {
 	testing.expect_value(t, host.wait_ms({}, false, now), max(u32))
 	testing.expect_value(t, host.wait_ms(time.tick_add(now, time.Hour), true, now), host.WAIT_LIMIT_MS)
 }
+
+// A quit or restart held for a reply keeps the loop running until released; a lost device ends it at once
+// and is never held; only a running loop starts a quit or restart.
+@(test)
+a_held_quit_runs_until_released :: proc(t: ^testing.T) {
+	run: host.Run
+	host.quit(&run)
+	testing.expect(t, host.quit_hold(&run))
+	testing.expect_value(t, run, host.Run.Draining)
+	testing.expect(t, host.running(run), "a held quit keeps the loop going")
+	host.restart(&run)
+	testing.expect(t, run == .Draining, "a held quit stays a quit")
+	host.quit_release(&run)
+	testing.expect_value(t, run, host.Run.Quit)
+	testing.expect(t, !host.running(run))
+
+	run = .Restart
+	testing.expect(t, host.quit_hold(&run))
+	host.quit_release(&run)
+	testing.expect_value(t, run, host.Run.Restart)
+
+	host.device_failed(&run)
+	testing.expect(t, !host.quit_hold(&run), "a failed device is not held")
+	host.quit(&run)
+	testing.expect_value(t, run, host.Run.Device_Failed)
+}
