@@ -10,11 +10,20 @@ package platform
 // The Win32 backend; a headless build compiles another (see HEADLESS in platform.odin).
 when !HEADLESS {
 	// Requested → Added. Explorer restarting drops the icon, so its broadcast brings the tray back here.
+	// The shell can still hold the icon then, as when a second broadcast follows the one that added it,
+	// and NIM_ADD fails for an icon it holds; NIM_MODIFY succeeding shows the icon is there.
 	@(require_results)
 	@(private)
 	tray_add :: proc(p: ^Platform) -> Error {
 		p.tray = Tray_Requested{}
-		if !os_ok(w.Shell_NotifyIconW(w.NIM_ADD, &p.tray_data), "Shell_NotifyIconW(add)") {return .Os}
+		if !bool(w.Shell_NotifyIconW(w.NIM_ADD, &p.tray_data)) {
+			add_error := w.GetLastError()
+			if !bool(w.Shell_NotifyIconW(w.NIM_MODIFY, &p.tray_data)) {
+				log.errorf("Shell_NotifyIconW(add) failed: Win32 %d", add_error)
+				log.errorf("Shell_NotifyIconW(modify) failed: Win32 %d", w.GetLastError())
+				return .Os
+			}
+		}
 		p.tray = Tray_Added{}
 		p.tray_data.uVersion = NOTIFYICON_VERSION_4
 		if !os_ok(
@@ -136,6 +145,7 @@ when !HEADLESS {
 	}
 
 	// A click on the notification reports `token` back in a Tray_Notification_Event; 0 means no target.
+	// An icon whose last add failed is added again first.
 	@(require_results)
 	tray_notify :: proc(
 		p: ^Platform,
@@ -143,6 +153,10 @@ when !HEADLESS {
 		token: Notification_Token = 0,
 		sound := true,
 	) -> Error {
+		if _, requested := p.tray.(Tray_Requested); requested {
+			err := tray_add(p)
+			if err != .None {return err}
+		}
 		added, ok := &p.tray.(Tray_Added)
 		if !ok {return .Not_Initialized}
 		data := p.tray_data

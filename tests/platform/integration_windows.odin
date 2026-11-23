@@ -480,6 +480,23 @@ tray_menu_validation :: proc(t: ^testing.T) {
 	testing.expect_value(t, p.tray_destroy(&platform), p.Error.None)
 }
 
+// Explorer can broadcast TaskbarCreated while it still holds the icon. Adding it again then fails,
+// which used to leave the tray Requested: notifications refused and destroy left the icon behind.
+@(test)
+tray_kept_when_taskbar_created_finds_the_icon :: proc(t: ^testing.T) {
+	platform: p.Platform
+	if !testing.expect_value(t, p.init(&platform, "AIODev.Test.TrayReadd"), p.Init_Result.Primary) { return }
+	defer testing.expect_value(t, p.destroy(&platform), p.Error.None)
+	if !testing.expect_value(t, p.tray_create(&platform, "Tray test"), p.Error.None) { return }
+	icon := platform.tray_data
+	w.SendMessageW(platform.host.hwnd, platform.taskbar_created, 0, 0)
+	_, poll_error := p.poll_events(&platform)
+	testing.expect_value(t, poll_error, p.Error.None)
+	testing.expect_value(t, p.tray_destroy(&platform), p.Error.None)
+	// The shell no longer holds the icon, so deleting it again fails.
+	testing.expect(t, !bool(w.Shell_NotifyIconW(w.NIM_DELETE, &icon)), "tray_destroy left the icon behind")
+}
+
 @(test)
 synthetic_mouse_moves :: proc(t: ^testing.T) {
 	platform: p.Platform

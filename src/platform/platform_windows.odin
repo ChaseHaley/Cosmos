@@ -108,7 +108,8 @@ when !HEADLESS {
 	Service_Failed :: struct {}
 
 	// The tray icon the app asked for. No variant means none was. Requested means the shell does not hold
-	// it because adding it failed, as it can when Explorer restarts; the next restart tries again.
+	// it because adding it failed, as it can when Explorer restarts; the next restart or tray_notify
+	// tries again.
 	@(private)
 	Tray :: union {
 		Tray_Requested,
