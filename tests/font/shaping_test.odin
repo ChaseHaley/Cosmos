@@ -286,3 +286,41 @@ shaping_allocation_failure_cleanup :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, completed)
 }
+
+@(private = "file")
+run_width :: proc(glyphs: []font.Shaped_Glyph) -> f32 {
+	width: f32
+	for g in glyphs {width += g.advance}
+	return width
+}
+
+// Proportional text asks for the font's kerning; text laid on a cell grid does not, and the two never
+// share a cached shape. Segoe UI, which every Windows install has, kerns "To" by -200/2048 em.
+@(test)
+kerning_applies_only_when_asked_and_caches_apart :: proc(t: ^testing.T) {
+	s, err := font.system_create()
+	if !testing.expect_value(t, err, font.Error.None) {return}
+	defer font.system_destroy(s)
+	family, load_err := font.family_load(s, "Segoe UI")
+	if !testing.expect_value(t, load_err, font.Error.None) {return}
+	run := [?]rune{'T', 'o'}
+	out := make([dynamic]font.Shaped_Glyph)
+	defer delete(out)
+	font.reset_shape_calls(s)
+	widths: [4]f32
+	for kern, i in ([4]bool{false, true, false, true}) {
+		clear(&out)
+		testing.expect_value(t, font.shape(s, family, .Regular, run[:], 32, &out, kern = kern), font.Error.None)
+		widths[i] = run_width(out[:])
+	}
+	tee, tee_found := font.glyph_lookup(s, family, .Regular, 'T')
+	oh, oh_found := font.glyph_lookup(s, family, .Regular, 'o')
+	if !testing.expect(t, tee_found && oh_found) {return}
+	apart := font.glyph_advance(s, tee, 32) + font.glyph_advance(s, oh, 32)
+	testing.expectf(t, abs(widths[0] - apart) < 0.001, "unkerned \"To\" is %v, its glyphs %v", widths[0], apart)
+	testing.expectf(t, widths[1] < apart - 1, "kerned \"To\" is %v, its glyphs %v", widths[1], apart)
+	// The repeats come from the cache, each from its own entry.
+	testing.expect_value(t, widths[2], widths[0])
+	testing.expect_value(t, widths[3], widths[1])
+	testing.expect_value(t, font.shape_calls(s), u64(2))
+}

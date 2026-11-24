@@ -3,6 +3,7 @@ package ui
 import "cosmos:font"
 import "cosmos:glyphs"
 import "cosmos:render"
+import "base:runtime"
 import "core:log"
 import "core:math"
 import "core:slice"
@@ -90,16 +91,17 @@ baseline_caps :: proc(y, height: f32, t: ^Text) -> f32 {
 
 text_width :: proc(t: ^Text, s: string) -> f32 {
 	width: f32
-	for r in s {
-		if g, found := font.glyph_lookup(t.fonts, t.family, .Regular, r); found {
-			width += font.glyph_advance(t.fonts, g, t.size_px)
-		}
+	for from := 0; from < len(s); {
+		piece := shape_piece(t, s, from)
+		for g in piece.glyphs {width += g.advance}
+		from = piece.end
 	}
 	return width
 }
 
-// Draws one line starting at the pen position on the baseline. Runes whose byte offsets appear in
-// `highlights` use `highlight`; text wider than `max_width` (when positive) ends in an ellipsis.
+// Draws one line starting at the pen position on the baseline, as the font shapes it. A glyph takes
+// `highlight` when the byte offset its cluster starts at appears in `highlights`; text wider than
+// `max_width` (when positive) ends in an ellipsis, cut between clusters.
 draw_text :: proc(
 	t: ^Text,
 	list: ^render.Draw_List,
@@ -111,47 +113,70 @@ draw_text :: proc(
 	highlight: render.Color = {},
 ) -> render.Build_Status {
 	limit := max_width > 0 ? max_width - text_width(t, ELLIPSIS) : max(f32)
-	// Measuring stops at the first rune past `max_width`, so a long string costs no more than what fits.
-	clipped := false
-	if max_width > 0 {
-		width: f32
-		for r in s {
-			g, found := font.glyph_lookup(t.fonts, t.family, .Regular, r)
-			if !found {
-				continue
-			}
-			width += font.glyph_advance(t.fonts, g, t.size_px)
-			if width > max_width {
-				clipped = true
-				break
-			}
-		}
-	}
+	edge := max_width > 0 ? max_width : max(f32)
 	pen := x
 	next := 0
-	for r, offset in s {
-		g, found := font.glyph_lookup(t.fonts, t.family, .Regular, r)
-		if !found {
-			continue
+	// Clusters from the first one past `limit` are held back: the ellipsis takes their place if the text
+	// turns out wider than `max_width`. Measuring stops at the first cluster past it, so a long string
+	// is shaped no further than the piece that shows its end.
+	cut: Shaped_Piece
+	cut_glyph, cut_next := -1, 0
+	cut_pen: f32
+	piece: Shaped_Piece
+	for piece.end < len(s) {
+		piece = shape_piece(t, s, piece.end)
+		for i := 0; i < len(piece.glyphs); {
+			end, advance := cluster_glyphs(piece.glyphs, i)
+			if cut_glyph < 0 && pen + advance - x > limit {
+				cut, cut_glyph, cut_pen, cut_next = piece, i, pen, next
+			}
+			if cut_glyph < 0 {
+				result := draw_shaped(
+					t, list, piece.glyphs[i:end], &pen, baseline, color, highlights, highlight, &next,
+				)
+				if result != .Ok {return result}
+			} else {
+				if pen + advance - x > edge {return draw_text(t, list, ELLIPSIS, cut_pen, baseline, color)}
+				pen += advance
+			}
+			i = end
 		}
-		advance := font.glyph_advance(t.fonts, g, t.size_px)
-		if clipped && pen + advance - x > limit {
-			break
-		}
-		c := color
-		for next < len(highlights) && highlights[next] < offset {
-			next += 1
-		}
-		if next < len(highlights) && highlights[next] == offset {
-			c = highlight
-		}
-		if result := draw_glyph(t, list, g, pen, baseline, c); result != .Ok {
+	}
+	if cut_glyph < 0 {return .Ok}
+	// The text fits after all, so the clusters held back draw too.
+	piece, pen, next = cut, cut_pen, cut_next
+	rest := piece.glyphs[cut_glyph:]
+	for {
+		if result := draw_shaped(t, list, rest, &pen, baseline, color, highlights, highlight, &next);
+		   result != .Ok {
 			return result
 		}
-		pen += advance
+		if piece.end == len(s) {return .Ok}
+		piece = shape_piece(t, s, piece.end)
+		rest = piece.glyphs
 	}
-	if clipped {
-		return draw_text(t, list, ELLIPSIS, pen, baseline, color)
+}
+
+// Draws shaped glyphs from the pen on the baseline and moves the pen on by their advances. `next` walks
+// the sorted `highlights` along with the glyphs' clusters.
+@(private)
+draw_shaped :: proc(
+	t: ^Text,
+	list: ^render.Draw_List,
+	glyphs: []font.Shaped_Glyph,
+	pen: ^f32,
+	baseline: f32,
+	color: render.Color,
+	highlights: []int,
+	highlight: render.Color,
+	next: ^int,
+) -> render.Build_Status {
+	for g in glyphs {
+		for next^ < len(highlights) && highlights[next^] < g.cluster {next^ += 1}
+		c := next^ < len(highlights) && highlights[next^] == g.cluster ? highlight : color
+		at := pen^ + g.offset.x
+		if result := draw_glyph(t, list, g.glyph, at, baseline - g.offset.y, c); result != .Ok {return result}
+		pen^ += g.advance
 	}
 	return .Ok
 }
@@ -173,6 +198,170 @@ draw_glyph :: proc(
 	return .Ok
 }
 
+// A piece of a line as the font sets it: its glyphs in drawing order, each glyph's cluster the byte offset
+// in the line where its grapheme cluster starts, and the byte offsets where the piece's grapheme clusters
+// start. The piece ends at byte `end`.
+@(private)
+Shaped_Piece :: struct {
+	glyphs:    []font.Shaped_Glyph,
+	graphemes: []int,
+	end:       int,
+}
+
+// Shapes `s` from byte `from` in `t`'s regular face, with system fallback, on whole grapheme clusters and
+// no more than CLIP_BYTES of them unless one cluster is longer. A long line is so shaped only as far as a
+// caller reads it, and a label drawn every frame is one hit in the shaping cache. The piece lives in temp
+// memory. Text that fails to shape is logged and takes no room.
+@(private)
+shape_piece :: proc(t: ^Text, s: string, from: int) -> (piece: Shaped_Piece) {
+	piece.end = len(s)
+	graphemes := make([dynamic]int, 0, min(len(s) - from, CLIP_BYTES), context.temp_allocator)
+	count, end := 0, from
+	it := utf8.decode_grapheme_iterator_make(s[from:])
+	for cluster, g in utf8.decode_grapheme_iterate(&it) {
+		at := from + g.byte_index
+		if at + len(cluster) - from > CLIP_BYTES && len(graphemes) > 0 {break}
+		if _, err := append(&graphemes, at); err != nil {
+			log.errorf("ui: shaping text failed: %v", err)
+			return
+		}
+		count += utf8.rune_count_in_string(cluster)
+		end = at + len(cluster)
+	}
+	runes, runes_err := make([]rune, count, context.temp_allocator)
+	ids, ids_err := make([]int, count, context.temp_allocator)
+	offsets, offsets_err := make([]int, count, context.temp_allocator)
+	shaped, shaped_err := make([dynamic]font.Shaped_Glyph, 0, count, context.temp_allocator)
+	if runes_err != nil || ids_err != nil || offsets_err != nil || shaped_err != nil {
+		log.error("ui: shaping text failed: out of memory")
+		return
+	}
+	n := 0
+	for start, k in graphemes {
+		stop := k + 1 < len(graphemes) ? graphemes[k + 1] : end
+		for r, i in s[start:stop] {
+			runes[n], ids[n], offsets[n] = r, k, start + i
+			n += 1
+		}
+	}
+	piece.graphemes, piece.end = graphemes[:], end
+	err := font.shape(t.fonts, t.family, .Regular, runes, t.size_px, &shaped, ids, kern = true)
+	if err != .None {
+		log.errorf("ui: shaping text failed: %v", err)
+		return
+	}
+	for &g in shaped {g.cluster = offsets[g.cluster]}
+	piece.glyphs = shaped[:]
+	return
+}
+
+// The end of the glyphs from `i` on that share its cluster, and their advance together.
+@(private)
+cluster_glyphs :: proc(glyphs: []font.Shaped_Glyph, i: int) -> (end: int, advance: f32) {
+	end = i
+	for end < len(glyphs) && glyphs[end].cluster == glyphs[i].cluster {
+		advance += glyphs[end].advance
+		end += 1
+	}
+	return
+}
+
+// Where the caret stands along one line of text as draw_text sets it, in temp memory. `x[i]` is how far
+// from the line's start the caret stands before byte `i`, for every byte through the end of what was laid
+// out; it is -1 inside a grapheme cluster, where no caret stops. A ligature over several clusters shares
+// its advance evenly among them, as DirectWrite's own hit testing does.
+@(private)
+Text_Line :: struct {
+	x: []f32,
+}
+
+// Lays out `s` for its carets, shaped as draw_text shapes it. Given a `width`, it stops after the piece
+// that reaches past it, for a caller that never looks further right. Without memory it lays out nothing.
+@(private)
+text_line :: proc(t: ^Text, s: string, width := max(f32)) -> Text_Line {
+	x := make([dynamic]f32, 0, min(len(s), CLIP_BYTES) + 1, context.temp_allocator)
+	if _, err := line_fill(t, s, &x, 0, width); err != nil {
+		log.errorf("ui: laying out text failed: %v", err)
+		return {}
+	}
+	return {x[:]}
+}
+
+// Appends the caret positions of `s` laid out from `origin` to `x`, one per byte and one for its end, and
+// returns the pen where it stopped: the end of `s`, or the end of the piece that reaches past `width`.
+@(private, require_results)
+line_fill :: proc(
+	t: ^Text, s: string, x: ^[dynamic]f32, origin: f32, width := max(f32),
+) -> (pen: f32, err: runtime.Allocator_Error) {
+	base := len(x^)
+	pen = origin
+	from := 0
+	for from < len(s) && pen - origin <= width {
+		piece := shape_piece(t, s, from)
+		resize(x, base + piece.end) or_return
+		slice.fill(x^[base + from:], -1)
+		x^[base + from] = pen
+		glyph := 0
+		for k := 0; k < len(piece.graphemes); {
+			at := piece.graphemes[k]
+			if glyph == len(piece.glyphs) || piece.glyphs[glyph].cluster != at {
+				// A cluster no font draws takes no room.
+				x^[base + at] = pen
+				k += 1
+				continue
+			}
+			end, advance := cluster_glyphs(piece.glyphs, glyph)
+			reach := end < len(piece.glyphs) ? piece.glyphs[end].cluster : piece.end
+			n := 1
+			for k + n < len(piece.graphemes) && piece.graphemes[k + n] < reach {n += 1}
+			for j in 0 ..< n {x^[base + piece.graphemes[k + j]] = pen + advance * f32(j) / f32(n)}
+			pen += advance
+			glyph, k = end, k + n
+		}
+		from = piece.end
+	}
+	_, err = append(x, pen)
+	return
+}
+
+// The caret's x before byte `offset`: at the start of the cluster it falls in, and at the end of what
+// was laid out when past it.
+@(private)
+text_line_x :: proc(line: Text_Line, offset: int) -> f32 {
+	if len(line.x) == 0 {return 0}
+	i := clamp(offset, 0, len(line.x) - 1)
+	for i > 0 && line.x[i] < 0 {i -= 1}
+	return line.x[i]
+}
+
+// The first caret stop after `offset`, or the end of what was laid out.
+@(private)
+text_line_next :: proc(line: Text_Line, offset: int) -> int {
+	i := offset + 1
+	for i < len(line.x) - 1 && line.x[i] < 0 {i += 1}
+	return max(0, min(i, len(line.x) - 1))
+}
+
+// The last caret stop before `offset`, or the line's start.
+@(private)
+text_line_previous :: proc(line: Text_Line, offset: int) -> int {
+	i := min(offset, len(line.x)) - 1
+	for i > 0 && line.x[i] < 0 {i -= 1}
+	return max(i, 0)
+}
+
+// The caret stop nearest to `x`: a point on the left half of a cluster is before it.
+@(private)
+text_line_offset_at :: proc(line: Text_Line, x: f32) -> int {
+	at := 0
+	for at < len(line.x) - 1 {
+		next := text_line_next(line, at)
+		if x < (line.x[at] + line.x[next]) / 2 {return at}
+		at = next
+	}
+	return at
+}
+
 // Splits `s` into lines no wider than `width`, breaking at spaces where possible.
 wrap :: proc(t: ^Text, s: string, width: f32, out: ^[dynamic]string) {
 	clear(out)
@@ -187,18 +376,22 @@ Wrap_Lines :: struct {
 	width:                           f32,
 	offset, line_start, last_space:  int,
 	line_width, width_through_space: f32,
+	// Where the caret stands along `s` as the font sets it, laid out on the first call.
+	line:                            Text_Line,
 }
 
-// The next line's byte range; the space a line breaks at belongs to neither line.
+// The next line's byte range; the space a line breaks at belongs to neither line. Widths are measured
+// along the whole string as the font shapes it, a grapheme cluster at a time.
 wrap_next :: proc(w: ^Wrap_Lines) -> (start, end: int, ok: bool) {
+	if w.line.x == nil && w.s != "" {
+		w.line = text_line(w.text, w.s)
+		// Text that could not be laid out stays one line.
+		if w.line.x == nil {w.offset = len(w.s)}
+	}
 	for w.offset < len(w.s) {
 		offset := w.offset
-		r, size := utf8.decode_rune_in_string(w.s[offset:])
-		w.offset += size
-		advance: f32
-		if g, found := font.glyph_lookup(w.text.fonts, w.text.family, .Regular, r); found {
-			advance = font.glyph_advance(w.text.fonts, g, w.text.size_px)
-		}
+		w.offset = text_line_next(w.line, offset)
+		advance := text_line_x(w.line, w.offset) - text_line_x(w.line, offset)
 		broke := false
 		if w.line_width + advance > w.width && offset > w.line_start {
 			broke, start = true, w.line_start
@@ -213,7 +406,8 @@ wrap_next :: proc(w: ^Wrap_Lines) -> (start, end: int, ok: bool) {
 			w.last_space = -1
 		}
 		w.line_width += advance
-		if r == ' ' {
+		// A space a mark sits on is a cluster of its own, not a place to break.
+		if w.s[offset] == ' ' && w.offset == offset + 1 {
 			w.last_space, w.width_through_space = offset, w.line_width
 		}
 		if broke {return start, end, true}
@@ -293,8 +487,8 @@ text_mono :: proc(t: ^Text, family: font.Family) -> Text {
 	return copy
 }
 
-// Draws one line that fades out over its last fifth when wider than `width`. Runes whose byte offsets
-// appear in `highlights` use `highlight`, as draw_text's do.
+// Draws one line that fades out over its last fifth when wider than `width`. Glyphs take `highlight` as
+// draw_text's do.
 draw_fading_text :: proc(
 	t: ^Text,
 	list: ^render.Draw_List,
@@ -306,24 +500,30 @@ draw_fading_text :: proc(
 	highlight: render.Color = {},
 ) -> render.Build_Status {
 	if width <= 0 {return .Ok}
-	pen := x
-	clipped := text_width(t, s) > width
+	pen, edge := x, x + width
+	first := len(list.glyphs)
 	next := 0
-	for r, offset in s {
-		if pen >= x + width {break}
-		g, found := font.glyph_lookup(t.fonts, t.family, .Regular, r)
-		if !found {continue}
-		start := len(list.glyphs)
-		c := color
-		for next < len(highlights) && highlights[next] < offset {next += 1}
-		if next < len(highlights) && highlights[next] == offset {c = highlight}
-		if result := draw_glyph(t, list, g, pen, baseline, c); result != .Ok {return result}
-		if clipped && len(list.glyphs) > start {
-			glyph := &list.glyphs[start]
-			glyph.flags |= render.GLYPH_FADE
-			glyph.fade_start, glyph.fade_end = x + width * 0.8, x + width
+	// Drawing stops at the first glyph past the edge, which also shows the text is wider than `width`.
+	clipped := false
+	drawing: for from := 0; from < len(s); {
+		piece := shape_piece(t, s, from)
+		for i in 0 ..< len(piece.glyphs) {
+			if pen >= edge {
+				clipped = true
+				break drawing
+			}
+			result := draw_shaped(
+				t, list, piece.glyphs[i:i + 1], &pen, baseline, color, highlights, highlight, &next,
+			)
+			if result != .Ok {return result}
 		}
-		pen += font.glyph_advance(t.fonts, g, t.size_px)
+		from = piece.end
+	}
+	if clipped || pen > edge {
+		for &glyph in list.glyphs[first:] {
+			glyph.flags |= render.GLYPH_FADE
+			glyph.fade_start, glyph.fade_end = x + width * 0.8, edge
+		}
 	}
 	return .Ok
 }
@@ -451,7 +651,7 @@ draw_cluster_centered :: proc(
 // The baseline that centres one line of `t` in a row `height` tall starting at `y`.
 baseline_in :: proc(y, height: f32, t: ^Text) -> f32 {return y + (height - t.line_height) / 2 + t.ascent}
 
-// The most bytes of a title or path a row measures; see clip_bytes.
+// The most bytes of a title or path a row measures (see clip_bytes), and of a piece of text shaped at once.
 CLIP_BYTES :: 512
 
 // The start of `s` of at most `limit` bytes, cut on a rune boundary. Long titles and paths only ever show

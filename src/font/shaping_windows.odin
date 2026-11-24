@@ -16,6 +16,8 @@ Shape_Key :: struct {
 	face: Face_Id,
 	size: f32,
 	hash: u64,
+	// Kerned and unkerned shapes of one run differ, so they never share an entry.
+	kern: bool,
 }
 
 @(private)
@@ -98,7 +100,8 @@ shaping_destroy :: proc(p: ^Shaping) {
 // rune its own cluster. A multi-rune cluster the primary face cannot fully display, or one
 // that requests emoji presentation, is shaped whole in the system fallback font when one
 // fallback face covers it, so ZWJ sequences, flags, keycaps, and skin tones become the single
-// glyph the fallback font defines.
+// glyph the fallback font defines. kern applies the font's pair kerning, for proportional text;
+// leave it off for text laid on a cell grid, whose advances the grid replaces anyway.
 @(require_results)
 shape :: proc(
 	s: ^System,
@@ -108,6 +111,7 @@ shape :: proc(
 	size_px: f32,
 	out: ^[dynamic]Shaped_Glyph,
 	clusters: []int = nil,
+	kern := false,
 ) -> Error {
 	assert(s != nil)
 	assert(out != nil)
@@ -133,7 +137,7 @@ shape :: proc(
 	p := &s.shaping
 	p.clock += 1
 	id := family.faces[style]
-	key := Shape_Key{id, size_px, hash}
+	key := Shape_Key{id, size_px, hash, kern}
 	index, indexed := p.index[key]
 	if indexed {
 		entry := &p.entries[index]
@@ -167,7 +171,7 @@ shape :: proc(
 			continue
 		}
 		if needs_fallback(p.coverage[start:end], runes[start:end]) {
-			if err := shape_fallback(s, family, style, runes[start:end], start, size_px);
+			if err := shape_fallback(s, family, style, runes[start:end], start, size_px, kern);
 			   err != .None {
 				return err
 			}
@@ -193,7 +197,7 @@ shape :: proc(
 			   needs_fallback(p.coverage[end:next], runes[end:next]) {break}
 			end = next
 		}
-		if err := shape_span(s, id, runes[start:end], start, size_px, 1); err != .None {return err}
+		if err := shape_span(s, id, runes[start:end], start, size_px, 1, kern); err != .None {return err}
 		start = end
 	}
 	// DirectWrite reports clusters per rune when a font does not ligate a sequence; attribute
@@ -357,6 +361,7 @@ shape_fallback :: proc(
 	runes: []rune,
 	base: int,
 	size: f32,
+	kern: bool,
 ) -> Error {
 	p := &s.shaping
 	if resize(&p.text, len(runes) * 2) != nil {return .Out_Of_Memory}
@@ -366,7 +371,7 @@ shape_fallback :: proc(
 	mapping, covered, err := fallback_resolve(s, family, style, p.text[:n], map_base)
 	if err == .Out_Of_Memory {return err}
 	if covered {
-		return shape_span(s, mapping.face, runes, base, size, mapping.scale)
+		return shape_span(s, mapping.face, runes, base, size, mapping.scale, kern)
 	}
 	for r, i in runes {
 		g, found := glyph_lookup(s, family, style, r)
@@ -389,7 +394,9 @@ shape_append :: proc(out: ^[dynamic]Shaped_Glyph, glyphs: []Shaped_Glyph) -> Err
 }
 
 @(private, require_results)
-shape_span :: proc(s: ^System, id: Face_Id, runes: []rune, base: int, size, scale: f32) -> Error {
+shape_span :: proc(
+	s: ^System, id: Face_Id, runes: []rune, base: int, size, scale: f32, kern: bool,
+) -> Error {
 	p := &s.shaping
 	s.shape_calls += 1
 	if resize(&p.text, len(runes) * 2) != nil || resize(&p.rune_map, len(runes) * 2) != nil {
@@ -432,22 +439,24 @@ shape_span :: proc(s: ^System, id: Face_Id, runes: []rune, base: int, size, scal
 		for end < n && p.scripts[end] == p.scripts[start] {
 			end += 1
 		}
-		if err := shape_script(s, id, start, end, size, scale); err != .None {return err}
+		if err := shape_script(s, id, start, end, size, scale, kern); err != .None {return err}
 		start = end
 	}
 	return .None
 }
 
 @(private, require_results)
-shape_script :: proc(s: ^System, id: Face_Id, start, end: int, size, scale: f32) -> Error {
+shape_script :: proc(s: ^System, id: Face_Id, start, end: int, size, scale: f32, kern: bool) -> Error {
 	p := &s.shaping
 	n := u32(end - start)
 	capacity := min(int(max(u16)), int(n) * 3 / 2 + 16)
-	features := [2]dw.Font_Feature {
+	// An explicit feature list replaces DirectWrite's defaults, so kerning must be asked for by name.
+	features := [3]dw.Font_Feature {
 		{dw.FONT_FEATURE_TAG_CONTEXTUAL_ALTERNATES, 1},
 		{dw.FONT_FEATURE_TAG_STANDARD_LIGATURES, 1},
+		{dw.FONT_FEATURE_TAG_KERNING, 1},
 	}
-	typography := dw.Typographic_Features{raw_data(features[:]), 2}
+	typography := dw.Typographic_Features{raw_data(features[:]), kern ? 3 : 2}
 	feature_ptr := &typography
 	face := face_get(s, id)
 	text := windows.wstring(&p.text[start])

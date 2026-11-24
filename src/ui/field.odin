@@ -120,17 +120,56 @@ atom_edge :: proc(f: ^Text_Field, at: int, forward: bool) -> int {
 	return at
 }
 
-@(private)
-rune_left :: proc(f: ^Text_Field, at: int) -> int {
-	if at <= 0 {return 0}
-	_, n := utf8.decode_last_rune(f.bytes[:at])
-	return atom_edge(f, at - n, false)
+// How far back from a caret the field looks for a place to segment grapheme clusters from; only an
+// absurdly long cluster reaches further.
+@(private = "file")
+GRAPHEME_LOOKBACK :: 64
+
+// Whether `r` continues the grapheme cluster before it, whatever that cluster is.
+@(private = "file")
+grapheme_joins :: proc(r: rune) -> bool {
+	return unicode.is_gcb_extend_class(r) || unicode.is_spacing_mark(r) || r == unicode.ZERO_WIDTH_JOINER ||
+	       unicode.is_regional_indicator(r) || unicode.is_hangul_syllable_vowel(r) ||
+	       unicode.is_hangul_syllable_trailing(r)
 }
 
-rune_right :: proc(f: ^Text_Field, at: int) -> int {
+// The start of the grapheme cluster that ends at `at`. Segmenting only runs forward, so it starts from a
+// nearby place a cluster starts at: between two ASCII characters, or a rune that joins nothing before it
+// at least GRAPHEME_LOOKBACK bytes back.
+@(private = "file")
+grapheme_before :: proc(s: string, at: int) -> int {
+	from := at
+	for from > 0 {
+		r, size := utf8.decode_last_rune_in_string(s[:from])
+		from -= size
+		if from == 0 || (r < 0x80 && s[from - 1] < 0x80) {break}
+		if at - from >= GRAPHEME_LOOKBACK && !grapheme_joins(r) {break}
+	}
+	start := from
+	it := utf8.decode_grapheme_iterator_make(s[from:at])
+	for _, g in utf8.decode_grapheme_iterate(&it) {start = from + g.byte_index}
+	return start
+}
+
+// The end of the grapheme cluster that starts at `at`.
+@(private = "file")
+grapheme_after :: proc(s: string, at: int) -> int {
+	it := utf8.decode_grapheme_iterator_make(s[at:])
+	cluster, _, _ := utf8.decode_grapheme_iterate(&it)
+	return at + len(cluster)
+}
+
+// The caret stop before `at`: the start of the grapheme cluster before it, or of the atom holding that.
+@(private)
+caret_stop_left :: proc(f: ^Text_Field, at: int) -> int {
+	if at <= 0 {return 0}
+	return atom_edge(f, grapheme_before(field_string(f), at), false)
+}
+
+// The caret stop after `at`: the end of the grapheme cluster after it, or of the atom holding that.
+caret_stop_right :: proc(f: ^Text_Field, at: int) -> int {
 	if at >= len(f.bytes) {return len(f.bytes)}
-	_, n := utf8.decode_rune(f.bytes[at:])
-	return atom_edge(f, at + n, true)
+	return atom_edge(f, grapheme_after(field_string(f), at), true)
 }
 
 @(private)
@@ -199,7 +238,7 @@ word_left :: proc(f: ^Text_Field, at: int) -> int {
 	for i > 0 {
 		r, _ := utf8.decode_last_rune(f.bytes[:i])
 		if !unicode.is_space(r) {break}
-		i = rune_left(f, i)
+		i = caret_stop_left(f, i)
 	}
 	if i <= 0 {return 0}
 	r, _ := utf8.decode_last_rune(f.bytes[:i])
@@ -207,7 +246,7 @@ word_left :: proc(f: ^Text_Field, at: int) -> int {
 	for i > 0 {
 		previous, _ := utf8.decode_last_rune(f.bytes[:i])
 		if unicode.is_space(previous) || field_word_rune(previous) != word {break}
-		i = rune_left(f, i)
+		i = caret_stop_left(f, i)
 	}
 	return i
 }
@@ -223,14 +262,14 @@ word_right :: proc(f: ^Text_Field, at: int) -> int {
 			for i < len(f.bytes) {
 				next, _ := utf8.decode_rune(f.bytes[i:])
 				if unicode.is_space(next) || field_word_rune(next) != word {break}
-				i = rune_right(f, i)
+				i = caret_stop_right(f, i)
 			}
 		}
 	}
 	for i < len(f.bytes) {
 		next, _ := utf8.decode_rune(f.bytes[i:])
 		if !unicode.is_space(next) {break}
-		i = rune_right(f, i)
+		i = caret_stop_right(f, i)
 	}
 	return i
 }
@@ -265,16 +304,16 @@ field_key :: proc(f: ^Text_Field, e: input.Key_Event) -> Field_Change {
 		return field_move(f, len(f.bytes), shift)
 	case .Arrow_Left:
 		if !shift && start != end {return field_move(f, start, false)}
-		return field_move(f, control ? word_left(f, f.cursor) : rune_left(f, f.cursor), shift)
+		return field_move(f, control ? word_left(f, f.cursor) : caret_stop_left(f, f.cursor), shift)
 	case .Arrow_Right:
 		if !shift && start != end {return field_move(f, end, false)}
-		return field_move(f, control ? word_right(f, f.cursor) : rune_right(f, f.cursor), shift)
+		return field_move(f, control ? word_right(f, f.cursor) : caret_stop_right(f, f.cursor), shift)
 	case .Backspace, .Delete:
 		if start == end {
 			if e.key == .Backspace {
-				start = control ? word_left(f, f.cursor) : rune_left(f, f.cursor)
+				start = control ? word_left(f, f.cursor) : caret_stop_left(f, f.cursor)
 			} else {
-				end = control ? word_right(f, f.cursor) : rune_right(f, f.cursor)
+				end = control ? word_right(f, f.cursor) : caret_stop_right(f, f.cursor)
 			}
 		}
 		if start == end {return .None}
@@ -285,32 +324,48 @@ field_key :: proc(f: ^Text_Field, e: input.Key_Event) -> Field_Change {
 	return .None
 }
 
+// The text before a field's caret, laid out a window of CLIP_BYTES at a time back from the caret: the
+// window is value[start:end], laid out in `line`, and `behind` is how wide the text from `end` to the
+// caret is.
+@(private = "file")
+View_Window :: struct {
+	text:       ^Text,
+	value:      string,
+	start, end: int,
+	line:       Text_Line,
+	behind:     f32,
+}
+
+// Moves the window to the text before it.
+@(private = "file")
+view_window_back :: proc(w: ^View_Window) {
+	w.behind += text_line_x(w.line, w.end - w.start)
+	w.end, w.start = w.start, max(0, w.start - CLIP_BYTES)
+	for w.start > 0 && (w.value[w.start] & 0xC0) == 0x80 {w.start -= 1}
+	w.line = text_line(w.text, w.value[w.start:w.end])
+}
+
 // The first byte shown when the caret must stay inside `available` pixels: the earliest caret stop whose
-// text up to the caret fits. It walks left from the caret one stop at a time, so a long line costs one
-// measurement of the text before the caret per frame.
+// text up to the caret fits. It walks left from the caret one stop at a time through windows of the text
+// before it, so a long line costs only the text the view reaches into.
 field_view_start :: proc(f: ^Text_Field, text: ^Text, available: f32) -> int {
-	value := field_string(f)
 	start := f.cursor
-	width: f32
+	w := View_Window{text = text, value = field_string(f), start = f.cursor, end = f.cursor}
 	for start > 0 {
-		previous := rune_left(f, start)
-		width += text_width(text, value[previous:start])
+		if start == w.start {view_window_back(&w)}
+		previous := atom_edge(f, w.start + text_line_previous(w.line, start - w.start), false)
+		for previous < w.start {view_window_back(&w)}
+		width := w.behind + text_line_x(w.line, w.end - w.start) - text_line_x(w.line, previous - w.start)
 		if width > available {break}
 		start = previous
 	}
 	return start
 }
 
-// The caret offset nearest to `x` for text drawn from `origin` starting at byte `start`.
+// The caret stop nearest to `x` for text drawn from `origin` starting at byte `start`.
 field_offset_at :: proc(f: ^Text_Field, text: ^Text, start: int, origin, x: f32) -> int {
-	value := field_string(f)
-	pen := origin
-	for r, offset in value[start:] {
-		advance := text_width(text, value[start + offset:][:utf8.rune_size(r)])
-		if x < pen + advance / 2 {return start + offset}
-		pen += advance
-	}
-	return len(value)
+	line := text_line(text, field_string(f)[start:], x - origin)
+	return start + text_line_offset_at(line, x - origin)
 }
 
 // Pointer press or drag at offset `at`; a press starts a new selection unless `extend` is held. A press
@@ -356,13 +411,16 @@ field_release :: proc(f: ^Text_Field) -> bool {
 	return dragging
 }
 
-// The cell the caret occupies at `at`: the character under it, or a space past the end, one line tall.
+// The cell the caret occupies at `at`: the cluster under it, or a space past the end, one line tall. `line`
+// is the text drawn from byte `start`.
 @(private)
 field_caret_cell :: proc(
-	f: ^Text_Field, text: ^Text, value: string, at, baseline, right: f32,
+	f: ^Text_Field, text: ^Text, line: Text_Line, start: int, at, baseline, right: f32,
 ) -> render.Rect {
 	width := text_width(text, " ")
-	if f.cursor < len(value) {width = text_width(text, value[f.cursor:rune_right(f, f.cursor)])}
+	if f.cursor < len(f.bytes) {
+		width = text_line_x(line, caret_stop_right(f, f.cursor) - start) - text_line_x(line, f.cursor - start)
+	}
 	return {at, baseline - text.ascent, max(1, min(width, right - at)), text.line_height}
 }
 
@@ -378,12 +436,15 @@ field_draw :: proc(
 ) -> render.Build_Status {
 	value := field_string(f)
 	start := field_view_start(f, text, available)
+	// The caret and the selection stand where draw_text below sets the text, as far as the field shows.
+	line: Text_Line
+	if focused {line = text_line(text, value[start:], available)}
 	selection: render.Rect
 	if focused && value != "" {
 		low, high := field_selection(f)
 		if low != high {
-			left := x + text_width(text, value[start:max(start, low)])
-			right := x + text_width(text, value[start:max(start, high)])
+			left := x + text_line_x(line, max(start, low) - start)
+			right := x + text_line_x(line, max(start, high) - start)
 			left, right = min(left, x + available), min(right, x + available)
 			selection = {left, baseline - text.ascent, right - left, text.line_height}
 			draw_rect(list, {rect = selection, color = theme.text_selection})
@@ -392,8 +453,8 @@ field_draw :: proc(
 	head: render.Rect
 	shown := false
 	if focused {
-		at := x + min(available, text_width(text, value[start:f.cursor]))
-		cell := field_caret_cell(f, text, value, at, baseline, x + available)
+		at := x + min(available, text_line_x(line, f.cursor - start))
+		cell := field_caret_cell(f, text, line, start, at, baseline, x + available)
 		drawn: bool
 		head, drawn = field_caret_pose(&f.caret, text.carets, {x, baseline}, cell, theme)
 		shown = drawn && caret_shown(text.carets, f.caret.motion.active)
