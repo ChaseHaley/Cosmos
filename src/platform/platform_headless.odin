@@ -58,6 +58,10 @@ when HEADLESS {
 		frame_color, frame_text:          [3]u8,
 		progress:                         Progress_State,
 		progress_percent:                 int,
+		// The accessibility tree window_access_set last stored; its strings live in access_text.
+		access:                           []Access_Node,
+		access_text:                      []u8,
+		access_focus:                     Access_Id,
 	}
 
 	// What the app asked of the operating system's services, for tests and the harness to read.
@@ -221,7 +225,105 @@ when HEADLESS {
 	@(private)
 	window_free :: proc(p: ^Platform, window: ^Window) {
 		delete(window.title, p.allocator)
+		delete(window.access, p.allocator)
+		delete(window.access_text, p.allocator)
 		free(window, p.allocator)
+	}
+
+	// Stores a copy of the tree for tests and the harness to read with window_access. It checks the
+	// nodes as the Win32 backend does, and an equal tree is not copied again.
+	@(require_results)
+	window_access_set :: proc(
+		p: ^Platform,
+		window: input.Window_Id,
+		nodes: []Access_Node,
+		focus: Access_Id,
+	) -> Error {
+		target := find_window(p, window)
+		if target == nil {return .Invalid_Window}
+		if focus == target.access_focus && access_equal(target.access, nodes) {return .None}
+		if !access_valid(nodes, focus) {return .Invalid_Argument}
+		size := 0
+		for node in nodes {size += len(node.name) + len(node.value)}
+		copied, nodes_error := make([]Access_Node, len(nodes), p.allocator)
+		if nodes_error != nil {return .Out_Of_Memory}
+		text, text_error := make([]u8, size, p.allocator)
+		if text_error != nil {
+			delete(copied, p.allocator)
+			return .Out_Of_Memory
+		}
+		used := 0
+		for node, i in nodes {
+			copied[i] = node
+			copied[i].name = string(text[used:][:copy(text[used:], node.name)])
+			used += len(node.name)
+			copied[i].value = string(text[used:][:copy(text[used:], node.value)])
+			used += len(node.value)
+		}
+		delete(target.access, p.allocator)
+		delete(target.access_text, p.allocator)
+		target.access, target.access_text, target.access_focus = copied, text, focus
+		return .None
+	}
+
+	// The tree window_access_set last stored and the node it named as focused. The nodes are valid until
+	// the next window_access_set or the window's destruction.
+	@(require_results)
+	window_access :: proc(p: ^Platform, window: input.Window_Id) -> ([]Access_Node, Access_Id, Error) {
+		target := find_window(p, window)
+		if target == nil {return nil, 0, .Invalid_Window}
+		return target.access, target.access_focus, .None
+	}
+
+	// What an assistive technology asks of a node: queues the event the Win32 backend would. The node
+	// must be in the window's stored tree.
+	@(require_results)
+	access_invoke :: proc(p: ^Platform, window: input.Window_Id, id: Access_Id, action: Access_Action) -> Error {
+		if err := access_node_check(p, window, id); err != .None {return err}
+		enqueue(p, Access_Invoke_Event{window, id, action})
+		return .None
+	}
+
+	@(require_results)
+	access_focus :: proc(p: ^Platform, window: input.Window_Id, id: Access_Id) -> Error {
+		if err := access_node_check(p, window, id); err != .None {return err}
+		enqueue(p, Access_Focus_Event{window, id})
+		return .None
+	}
+
+	@(private, require_results)
+	access_node_check :: proc(p: ^Platform, window: input.Window_Id, id: Access_Id) -> Error {
+		target := find_window(p, window)
+		if target == nil {return .Invalid_Window}
+		for node in target.access {
+			if node.id == id {return .None}
+		}
+		return .Invalid_Argument
+	}
+
+	@(private)
+	access_equal :: proc(held, nodes: []Access_Node) -> bool {
+		if len(held) != len(nodes) {return false}
+		for node, i in nodes {
+			h := held[i]
+			if node.id != h.id || node.parent != h.parent || node.role != h.role || node.states != h.states {
+				return false
+			}
+			if node.bounds != h.bounds || node.name != h.name || node.value != h.value {return false}
+		}
+		return true
+	}
+
+	// Ids are not 0 and not repeated, each parent is 0 or an earlier node, and focus is 0 or a node.
+	@(private)
+	access_valid :: proc(nodes: []Access_Node, focus: Access_Id) -> bool {
+		seen := make(map[Access_Id]struct{}, len(nodes), context.temp_allocator)
+		for node in nodes {
+			if node.id == 0 || node.id in seen || int(node.role) >= len(Access_Role) {return false}
+			if node.parent != 0 && node.parent not_in seen {return false}
+			seen[node.id] = {}
+		}
+		return focus == 0 || focus in seen
 	}
 
 	@(private)

@@ -59,6 +59,8 @@ when !HEADLESS {
 		drop_target:                      Drop_Target,
 		// True while keyboard focus lives in an embedded child window (e.g. WebView2).
 		child_focused:                    bool,
+		// The UI Automation provider native/windows_uia.cpp keeps, made by the first window_access_set.
+		access:                           rawptr,
 	}
 	Platform :: struct {
 		allocator:                  runtime.Allocator,
@@ -96,6 +98,8 @@ when !HEADLESS {
 		com_initialized:            bool,
 		// OleInitialize succeeded on this thread, so drop targets can register and one OleUninitialize is owed.
 		ole:                        bool,
+		// A window served UI Automation, so destroy releases what assistive technologies still hold.
+		access_used:                bool,
 	}
 
 	// A service the platform starts on first use. Its failure is kept, so a broken service is neither
@@ -289,6 +293,7 @@ when !HEADLESS {
 		first_error := p.error
 		for window in p.windows {
 			drop_target_revoke(window)
+			access_destroy(p, window)
 			if !os_ok(w.DestroyWindow(window.hwnd), "DestroyWindow") {
 				if first_error == .None {
 					first_error = .Os
@@ -299,6 +304,9 @@ when !HEADLESS {
 		}
 		tray_error := tray_destroy(p)
 		taskbar_destroy(p)
+		if access_error := access_shutdown(p); first_error == .None {
+			first_error = access_error
+		}
 		if first_error == .None {
 			first_error = tray_error
 		}
@@ -716,6 +724,7 @@ when !HEADLESS {
 				continue
 			}
 			drop_target_revoke(window)
+			access_destroy(p, window)
 			if !os_ok(w.DestroyWindow(window.hwnd), "DestroyWindow") {return .Os}
 			ordered_remove(&p.windows, i)
 			free(window, p.allocator)
@@ -1341,6 +1350,8 @@ when !HEADLESS {
 		case w.WM_PAINT:
 			record_os(p, w.ValidateRect(hwnd, nil), "ValidateRect")
 			return 0
+		case w.WM_GETOBJECT:
+			if result, answered := access_answer(window, wp, lp); answered {return result}
 		case w.WM_SETFOCUS:
 			window.child_focused = false
 			if window.id != 0 {

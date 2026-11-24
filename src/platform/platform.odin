@@ -141,6 +141,68 @@ Webview_Event :: struct {}
 Window_Moved_Event :: struct {
 	window: input.Window_Id,
 }
+// A window's accessibility tree is how screen readers and other assistive technologies learn what the
+// app draws. The app describes it as a flat list of nodes with window_access_set, every frame it draws.
+//
+// Names one node; the app chooses it and keeps it the same for the same thing across frames. 0 is the
+// window itself, the root every node without a parent belongs to.
+Access_Id :: distinct u64
+// What a node is to an assistive technology. Status is a notice that is read out when its name changes.
+Access_Role :: enum u8 {
+	Pane,
+	Group,
+	Text,
+	Image,
+	Button,
+	Check_Box,
+	Text_Field,
+	Combo_Box,
+	List,
+	List_Item,
+	Menu,
+	Menu_Item,
+	Dialog,
+	Status,
+}
+// Checked applies to a Check_Box, Selected to a List_Item, Read_Only to a Text_Field's value. A Combo_Box,
+// and a Menu_Item that opens a submenu, is Expanded or Collapsed.
+Access_State :: enum u8 {
+	Disabled,
+	Focusable,
+	Checked,
+	Expanded,
+	Collapsed,
+	Selected,
+	Read_Only,
+}
+// One thing the app draws. `bounds` is x, y, width and height in client pixels. Parents come before
+// their children, and siblings are in reading order. `value` is the text of a Text_Field or the choice
+// a Combo_Box shows.
+Access_Node :: struct {
+	id, parent:  Access_Id,
+	role:        Access_Role,
+	name, value: string,
+	bounds:      [4]f32,
+	states:      bit_set[Access_State;u16],
+}
+// What an assistive technology asked a node to do: press a Button or a Menu_Item, toggle a Check_Box,
+// or open or close a Combo_Box or a submenu.
+Access_Action :: enum u8 {
+	Invoke,
+	Toggle,
+	Expand,
+	Collapse,
+}
+Access_Invoke_Event :: struct {
+	window: input.Window_Id,
+	id:     Access_Id,
+	action: Access_Action,
+}
+// An assistive technology asked to move keyboard focus to a Focusable node.
+Access_Focus_Event :: struct {
+	window: input.Window_Id,
+	id:     Access_Id,
+}
 Event :: union {
 	input.Key_Event,
 	input.Text_Event,
@@ -164,6 +226,8 @@ Event :: union {
 	Wake_Event,
 	Webview_Event,
 	Window_Moved_Event,
+	Access_Invoke_Event,
+	Access_Focus_Event,
 }
 
 // Embedded web view handles (DirectComposition visual hosting on Windows; stubbed headless).

@@ -62,6 +62,8 @@ function Build-CosmosNative([string] $Root) {
     # The WebView2 SDK is pinned in vendor/webview2 (AIODev D-106); its loader links statically.
     $webviewInclude = Join-Path $Root 'vendor/webview2/include'
     Build-NativeLibrary $Root 'webview' 'native/windows_webview.cpp' "/std:c++20 /EHsc /MT /O2 /W4 /WX /I`"$webviewInclude`""
+    # The UI Automation provider is COM written against UIAutomationCore.h, as Microsoft documents it.
+    Build-NativeLibrary $Root 'uia' 'native/windows_uia.cpp' '/std:c++20 /EHsc /MT /O2 /W4 /WX'
 }
 
 # Builds the stylecheck tool beside this file into $Output with $Flags.
