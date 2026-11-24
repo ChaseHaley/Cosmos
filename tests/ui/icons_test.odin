@@ -75,3 +75,45 @@ crossed_eye_breaks_its_lids_for_the_slash :: proc(t: ^testing.T) {
 		testing.expect_value(t, segments, 1)
 	}
 }
+
+// The refresh arrow is an open circle whose clockwise end meets the arrowhead's arms, one level and one
+// plumb, with their edges on whole pixels like every other icon's straight lines.
+@(test)
+refresh_icon_arms_meet_the_circle_on_whole_pixels_at_every_scale :: proc(t: ^testing.T) {
+	list := render.draw_list_init()
+	defer render.draw_list_destroy(&list)
+	for scale in ([?]f32{1, 1.25, 1.5, 1.75, 2}) {
+		render.draw_list_reset(&list)
+		testing.expect_value(t, render.push_layer(&list, {0, 0, 64, 64}), render.Error.None)
+		ui.icon_draw(&list, .Refresh, {3, 5, 41, 37}, {1, 1, 1, 1}, ui.ICON_BUTTON, scale)
+		arcs: [dynamic]render.Rect_Instance
+		defer delete(arcs)
+		ends: [dynamic][2]f32
+		defer delete(ends)
+		for r in list.rects {
+			switch r.fill {
+			case render.RECT_FILL_ARC:
+				append(&arcs, r)
+			case render.RECT_FILL_SEGMENT:
+				a := [2]f32{r.rect.x + r.sheen[0], r.rect.y + r.sheen[1]}
+				b := [2]f32{r.rect.x + r.sheen[2], r.rect.y + r.sheen[3]}
+				testing.expect(t, a.x == b.x || a.y == b.y, "each arm is level or plumb")
+				half := r.stroke / 2
+				testing.expect(t, whole(a.x - half) && whole(a.y - half) && whole(b.x - half) && whole(b.y - half),
+					"the arms' edges are on whole pixels")
+				append(&ends, a, b)
+			case:
+				testing.fail_now(t, "the refresh icon is one arc and two arms")
+			}
+		}
+		if !testing.expect_value(t, len(arcs), 1) || !testing.expect_value(t, len(ends), 4) {continue}
+		arc := arcs[0]
+		testing.expect(t, arc.sheen[3] > math.PI && arc.sheen[3] < 2 * math.PI, "the circle is open")
+		finish := arc.sheen[2] + arc.sheen[3]
+		tip := arc_center(arc) + arc.radius * [2]f32{math.cos(finish), math.sin(finish)}
+		testing.expect(t, abs(tip.x - ends[1].x) < 1e-3 && abs(tip.y - ends[1].y) < 1e-3,
+			"the first arm ends at the circle's open end")
+		testing.expect(t, abs(tip.x - ends[2].x) < 1e-3 && abs(tip.y - ends[2].y) < 1e-3,
+			"the second arm starts there")
+	}
+}
