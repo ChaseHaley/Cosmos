@@ -285,12 +285,18 @@ field_key :: proc(f: ^Text_Field, e: input.Key_Event) -> Field_Change {
 	return .None
 }
 
-// The first byte shown when the caret must stay inside `available` pixels.
+// The first byte shown when the caret must stay inside `available` pixels: the earliest caret stop whose
+// text up to the caret fits. It walks left from the caret one stop at a time, so a long line costs one
+// measurement of the text before the caret per frame.
 field_view_start :: proc(f: ^Text_Field, text: ^Text, available: f32) -> int {
 	value := field_string(f)
-	start := 0
-	for start < f.cursor && text_width(text, value[start:f.cursor]) > available {
-		start = rune_right(f, start)
+	start := f.cursor
+	width: f32
+	for start > 0 {
+		previous := rune_left(f, start)
+		width += text_width(text, value[previous:start])
+		if width > available {break}
+		start = previous
 	}
 	return start
 }

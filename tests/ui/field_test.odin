@@ -1,5 +1,6 @@
 package ui_test
 
+import "cosmos:font"
 import "cosmos:input"
 import "cosmos:ui"
 import "core:strings"
@@ -184,4 +185,65 @@ field_shift_click_extends_instead_of_selecting_a_word :: proc(t: ^testing.T) {
 	ui.field_release(&f)
 	ui.field_pointer(&f, url_at("github", 3), true, true, 2)
 	testing.expect_value(t, ui.field_selected_text(&f), "https://git")
+}
+
+// `start` must be the earliest caret stop, as the caret reaches them from the line's start, that fits
+// its text up to the caret in `available`: its own span fits and the stop before it does not.
+@(private = "file")
+expect_view_start :: proc(t: ^testing.T, f: ^ui.Text_Field, text: ^ui.Text, available: f32, start: int) {
+	value := ui.field_string(f)
+	previous, stop := -1, 0
+	for stop < start {
+		previous, stop = stop, ui.rune_right(f, stop)
+	}
+	testing.expectf(t, stop == start, "start %d is not a caret stop", start)
+	if start < f.cursor {
+		fits := ui.text_width(text, value[start:f.cursor]) <= available
+		testing.expectf(t, fits, "start %d overflows", start)
+	}
+	if previous >= 0 {
+		late := ui.text_width(text, value[previous:f.cursor]) <= available
+		testing.expectf(t, !late, "start %d is late: the stop at %d fits too", start, previous)
+	}
+}
+
+@(test)
+field_view_starts_at_the_earliest_caret_stop_that_fits :: proc(t: ^testing.T) {
+	fonts, err := font.system_create()
+	if !testing.expect_value(t, err, font.Error.None) {return}
+	defer font.system_destroy(fonts)
+	text: ui.Text
+	if !testing.expect(t, ui.text_init(&text, fonts, nil, 16)) {return}
+	f: ui.Text_Field
+	defer delete(f.bytes)
+
+	// An atom is one stop: the view starts before it or after it, never inside.
+	ui.field_set(&f, `ab @"No vendor" cd`)
+	f.atoms = []ui.Field_Atom{{3, 15}}
+	tail := ui.text_width(&text, `@"No vendor" cd`)
+	widths := [?]f32{tail + 0.25, tail - 0.25, ui.text_width(&text, " cd") + 0.25, 0}
+	for available in widths {
+		expect_view_start(t, &f, &text, available, ui.field_view_start(&f, &text, available))
+	}
+	testing.expect_value(t, ui.field_view_start(&f, &text, tail + 0.25), 3)
+	testing.expect_value(t, ui.field_view_start(&f, &text, tail - 0.25), 15)
+	f.cursor, f.anchor = 15, 15
+	atom := ui.text_width(&text, `@"No vendor"`)
+	testing.expect_value(t, ui.field_view_start(&f, &text, atom - 0.25), 15)
+	f.atoms = nil
+
+	// A long line with the caret at its end shows only the text that fits before the caret.
+	ui.field_set(&f, strings.repeat("lorem ipsum ", 200, context.temp_allocator))
+	start := ui.field_view_start(&f, &text, 300)
+	testing.expect(t, start > 0)
+	expect_view_start(t, &f, &text, 300, start)
+	f.cursor, f.anchor = 600, 600
+	expect_view_start(t, &f, &text, 300, ui.field_view_start(&f, &text, 300))
+
+	// Too narrow for even the character before the caret, the view starts at the caret.
+	ui.field_set(&f, "héllo")
+	testing.expect_value(t, ui.field_view_start(&f, &text, 1), len("héllo"))
+	f.cursor, f.anchor = 3, 3
+	testing.expect_value(t, ui.field_view_start(&f, &text, 1), 3)
+	testing.expect_value(t, ui.field_view_start(&f, &text, 100), 0)
 }

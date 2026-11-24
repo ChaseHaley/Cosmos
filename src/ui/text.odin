@@ -111,7 +111,22 @@ draw_text :: proc(
 	highlight: render.Color = {},
 ) -> render.Build_Status {
 	limit := max_width > 0 ? max_width - text_width(t, ELLIPSIS) : max(f32)
-	clipped := max_width > 0 && text_width(t, s) > max_width
+	// Measuring stops at the first rune past `max_width`, so a long string costs no more than what fits.
+	clipped := false
+	if max_width > 0 {
+		width: f32
+		for r in s {
+			g, found := font.glyph_lookup(t.fonts, t.family, .Regular, r)
+			if !found {
+				continue
+			}
+			width += font.glyph_advance(t.fonts, g, t.size_px)
+			if width > max_width {
+				clipped = true
+				break
+			}
+		}
+	}
 	pen := x
 	next := 0
 	for r, offset in s {
