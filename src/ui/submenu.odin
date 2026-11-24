@@ -1,6 +1,7 @@
 package ui
 
 import "cosmos:input"
+import "cosmos:platform"
 import "cosmos:render"
 import "core:time"
 
@@ -60,6 +61,26 @@ submenu_place :: proc(
 	menu_anchor(&sub.menu, anchor.x, anchor.y)
 	menu_select(&sub.menu, select_first ? 0 : -1)
 	sub.row = row
+}
+
+// While it shows, adds the submenu as menu_access does, as Menu `base` under the row it hangs from in the
+// menu accessed as `parent_base`. Call it after that menu's menu_access, given `open = sub.row`. A row
+// scrolled out of that menu's view has no node, so the submenu then hangs under the menu itself.
+submenu_access :: proc(
+	sub: ^Submenu,
+	t: ^Access_Tree,
+	parent_base, base: platform.Access_Id,
+	name: string,
+	width, height, scale: f32,
+) {
+	row, shown := sub.row.?
+	if !shown {return}
+	parent := parent_base
+	row_id := access_part(parent_base, u64(row))
+	for node in t.nodes {
+		if node.id == row_id {parent = row_id; break}
+	}
+	menu_access(&sub.menu, t, parent, base, name, width, height, scale)
 }
 
 // The row whose submenu is due: the pointer, at `point`, has rested on it for SUBMENU_DELAY. The owner

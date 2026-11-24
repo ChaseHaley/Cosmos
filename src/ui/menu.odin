@@ -1,6 +1,7 @@
 package ui
 
 import "cosmos:input"
+import "cosmos:platform"
 import "cosmos:render"
 import "base:runtime"
 
@@ -208,6 +209,50 @@ menu_hit :: proc(m: ^Menu, x, y, width, height, scale: f32) -> int {
 		if y >= row.y && y < row.y + row.height {return i}
 	}
 	return -1
+}
+
+// Adds the menu as a Menu node `base` named `name`, and a Menu_Item for each row it shows, with id
+// access_part(base, row). A row's name is its label; its shortcut and detail are left out, as the platform
+// has no field a screen reader reads them from. Separators and rows scrolled out of view are left out, as
+// the screen does; the selection is always in view. `open` is the row whose submenu shows, Submenu.row,
+// which is Expanded while other submenu rows are Collapsed.
+menu_access :: proc(
+	m: ^Menu,
+	t: ^Access_Tree,
+	parent, base: platform.Access_Id,
+	name: string,
+	width, height, scale: f32,
+	open: Maybe(int) = nil,
+) {
+	surface, rows, first := menu_view(m, width, height, scale)
+	access_add(t, {id = base, parent = parent, role = .Menu, name = name, bounds = access_bounds(surface)})
+	open_row, has_open := open.?
+	for i in first..<min(first + rows, len(m.items)) {
+		item := m.items[i]
+		if item.separator {continue}
+		states: bit_set[platform.Access_State;u16]
+		if item.enabled {states += {.Focusable}} else {states += {.Disabled}}
+		if item.checked {states += {.Checked}}
+		if item.submenu {
+			if has_open && open_row == i {states += {.Expanded}} else {states += {.Collapsed}}
+		}
+		access_add(t, {
+			id = access_part(base, u64(i)),
+			parent = base,
+			role = .Menu_Item,
+			name = item.label,
+			bounds = access_bounds(menu_row_rect(m, i, width, height, scale)),
+			states = states,
+		})
+	}
+}
+
+// The row of the menu accessed as `base` whose node is `id`; false when no row has it.
+menu_access_row :: proc(m: ^Menu, base, id: platform.Access_Id) -> (row: int, ok: bool) {
+	for item, i in m.items {
+		if !item.separator && access_part(base, u64(i)) == id {return i, true}
+	}
+	return -1, false
 }
 
 // Where a row's button sits. Its slot is kept even while the button is hidden, so labels hold still.

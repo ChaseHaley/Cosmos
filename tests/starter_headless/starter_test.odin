@@ -199,3 +199,106 @@ moving_to_a_display_of_another_dpi_rescales_the_starter :: proc(t: ^testing.T) {
 	press(&s, .Left, {quit.x + quit.width / 2, quit.y + quit.height / 2})
 	testing.expect(t, s.run == .Quit, "a click on Quit at the new scale missed it")
 }
+
+// The node of the last committed tree named `name`, as a screen reader finds it.
+@(private = "file")
+find_node :: proc(nodes: []platform.Access_Node, name: string) -> (platform.Access_Node, bool) {
+	for node in nodes {
+		if node.name == name {return node, true}
+	}
+	return {}, false
+}
+
+// The tree of the frame the starter drew last, after it took the events queued for it.
+@(private = "file")
+access_tick :: proc(
+	t: ^testing.T,
+	s: ^starter.Starter,
+) -> (
+	[]platform.Access_Node,
+	platform.Access_Id,
+	bool,
+) {
+	starter.starter_tick(s)
+	nodes, focus, err := platform.window_access(&s.desktop, s.window)
+	return nodes, focus, testing.expect_value(t, err, platform.Error.None)
+}
+
+// A screen reader reads the viewer and the open menu, its rows named as shown with focus on the selected
+// one, and works it: focusing a row selects it, Expand on Playback speed opens the submenu under its row,
+// Invoke on a speed sets it and closes the menus, and Invoke on Quit quits.
+@(test)
+screen_readers_read_and_work_the_context_menu :: proc(t: ^testing.T) {
+	s: starter.Starter
+	if !open(t, &s) {return}
+	defer starter.starter_destroy(&s)
+	press(&s, .Right, {100, 100})
+	key(&s, .End)
+	nodes, focus, ok := access_tick(t, &s)
+	if !ok {return}
+	viewer := starter.viewer_rect(s.width, s.height, s.scale)
+	video, has_video := find_node(nodes, "Video")
+	testing.expect(t, has_video && video.role == .Image && video.parent == 0, "the viewer is not an Image")
+	testing.expect_value(t, video.bounds, [4]f32{viewer.x, viewer.y, viewer.width, viewer.height})
+	menu, has_menu := find_node(nodes, "Context menu")
+	if !testing.expect(t, has_menu && menu.role == .Menu, "the open menu is not a Menu") {return}
+	items: [dynamic]string
+	defer delete(items)
+	for node in nodes {
+		if node.parent == menu.id {
+			testing.expect_value(t, node.role, platform.Access_Role.Menu_Item)
+			append(&items, node.name)
+		}
+	}
+	testing.expect_value(t, len(items), 4)
+	if len(items) == 4 {
+		for name, i in ([?]string{"Open videos…", "Export clip…", "Playback speed", "Quit"}) {
+			testing.expect_value(t, items[i], name)
+		}
+	}
+	quit, _ := find_node(nodes, "Quit")
+	quit_rect := ui.menu_row_rect(&s.menu.menu, 5, f32(s.width), f32(s.height), s.scale)
+	testing.expect_value(t, quit.bounds, [4]f32{quit_rect.x, quit_rect.y, quit_rect.width, quit_rect.height})
+	testing.expect_value(t, focus, quit.id)
+
+	export, _ := find_node(nodes, "Export clip…")
+	testing.expect_value(t, platform.access_focus(&s.desktop, s.window, export.id), platform.Error.None)
+	nodes, focus, ok = access_tick(t, &s)
+	if !ok {return}
+	testing.expect_value(t, ui.menu_selected(&s.menu.menu), 1)
+	testing.expect_value(t, focus, export.id)
+
+	speed, _ := find_node(nodes, "Playback speed")
+	testing.expect(t, .Collapsed in speed.states, "the closed submenu's row is not Collapsed")
+	testing.expect_value(t, platform.access_invoke(&s.desktop, s.window, speed.id, .Expand), platform.Error.None)
+	nodes, focus, ok = access_tick(t, &s)
+	if !ok {return}
+	if !testing.expect(t, ui.submenu_shown(&s.menu.submenu), "Expand opened no submenu") {return}
+	speed, _ = find_node(nodes, "Playback speed")
+	testing.expect(t, .Expanded in speed.states, "the open submenu's row is not Expanded")
+	submenu: platform.Access_Node
+	for node in nodes {
+		if node.role == .Menu && node.parent == speed.id {submenu = node}
+	}
+	testing.expect(t, submenu.id != 0, "the submenu does not hang under its row")
+	half, _ := find_node(nodes, "0.5×")
+	testing.expect_value(t, half.parent, submenu.id)
+	testing.expect_value(t, focus, half.id)
+	double, _ := find_node(nodes, "2×")
+	chose := platform.access_invoke(&s.desktop, s.window, double.id, .Invoke)
+	testing.expect_value(t, chose, platform.Error.None)
+	nodes, focus, ok = access_tick(t, &s)
+	if !ok {return}
+	testing.expect_value(t, s.speed, f32(2))
+	testing.expect(t, !s.menu.shown, "choosing a speed left the menu open")
+	testing.expect_value(t, len(nodes), 1)
+	testing.expect_value(t, focus, platform.Access_Id(0))
+
+	press(&s, .Right, {100, 100})
+	nodes, _, ok = access_tick(t, &s)
+	if !ok {return}
+	quit, _ = find_node(nodes, "Quit")
+	testing.expect_value(t, platform.access_invoke(&s.desktop, s.window, quit.id, .Invoke), platform.Error.None)
+	starter.starter_tick(&s)
+	testing.expect(t, s.run == .Quit, "Invoke on Quit did not quit")
+}

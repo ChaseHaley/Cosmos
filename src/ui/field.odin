@@ -1,6 +1,7 @@
 package ui
 
 import "cosmos:input"
+import "cosmos:platform"
 import "cosmos:render"
 import "base:runtime"
 import "core:unicode"
@@ -425,4 +426,19 @@ field_draw :: proc(
 	// The block covers what is under it, which draws again over it in the cursor text colour.
 	under := value == "" ? placeholder : value[start:]
 	return draw_text(text, list, under, x, baseline, theme.caret_text, available)
+}
+
+// Adds the field to the window's semantic tree under `parent` as a Text_Field named `name`, the label the
+// app shows beside it or, without one, its hint. Its value is the field's text, empty when the field is
+// blank and the hint shows. `rect` is the box the field draws in. `id` is the field's; when the app
+// registers the field with Focus it passes platform.Access_Id of the field's Focus_Id.
+field_access :: proc(
+	f: ^Text_Field,
+	t: ^Access_Tree,
+	parent, id: platform.Access_Id,
+	name: string,
+	rect: render.Rect,
+) {
+	access_add(t, {id = id, parent = parent, role = .Text_Field, name = name, value = field_string(f),
+		bounds = access_bounds(rect), states = {.Focusable}})
 }

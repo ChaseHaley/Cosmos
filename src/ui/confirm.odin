@@ -1,6 +1,7 @@
 package ui
 
 import "cosmos:input"
+import "cosmos:platform"
 import "cosmos:render"
 
 Confirm_Button :: enum {
@@ -215,6 +216,76 @@ confirm_hover :: proc(c: ^Confirm, l: Confirm_Layout, x, y: f32) -> bool {
 	if hit == c.hover {return false}
 	c.hover = hit
 	return true
+}
+
+// While it asks, adds the dialog as Dialog `base` named `question`, with the option, when it shows, as a
+// Check_Box and Cancel and Accept as Buttons. Their names are the labels confirm_draw shows, and their ids
+// are their focus ids, so focus moving among them reaches assistive technology.
+confirm_access :: proc(
+	c: ^Confirm,
+	t: ^Access_Tree,
+	parent, base: platform.Access_Id,
+	question: string,
+	l: Confirm_Layout,
+	accept_label: string,
+	option_label: string = "",
+	cancel_label := "Cancel",
+) {
+	if !presence_is_open(c.presence) {return}
+	panel := platform.Access_Node {
+		id     = base,
+		parent = parent,
+		role   = .Dialog,
+		name   = question,
+		bounds = access_bounds(l.panel),
+	}
+	access_add(t, panel)
+	if c.show_option && option_label != "" {
+		states: bit_set[platform.Access_State;u16] = {.Focusable}
+		if c.option {states += {.Checked}}
+		access_add(t, {
+			id = platform.Access_Id(confirm_focus_id(c^, .Option)),
+			parent = base,
+			role = .Check_Box,
+			name = option_label,
+			bounds = access_bounds(l.option),
+			states = states,
+		})
+	}
+	buttons := [?]struct {
+		button: Confirm_Button,
+		label:  string,
+		rect:   render.Rect,
+	}{{.Cancel, cancel_label, l.cancel}, {.Accept, accept_label, l.accept}}
+	for b in buttons {
+		access_add(t, {
+			id = platform.Access_Id(confirm_focus_id(c^, b.button)),
+			parent = base,
+			role = .Button,
+			name = b.label,
+			bounds = access_bounds(b.rect),
+			states = {.Focusable},
+		})
+	}
+}
+
+// What an assistive technology's action on one of the dialog's nodes does, as a click on it would: Toggle
+// on the option checks or unchecks it and focuses it, and Invoke on a button answers with it. None for any
+// other node or action.
+confirm_access_invoke :: proc(c: ^Confirm, f: ^Focus, e: platform.Access_Invoke_Event) -> Confirm_Outcome {
+	if !presence_is_open(c.presence) {return .None}
+	for button in Confirm_Button {
+		if button == .None || e.id != platform.Access_Id(confirm_focus_id(c^, button)) {continue}
+		switch {
+		case button == .Option && c.show_option && e.action == .Toggle:
+			c.option = !c.option
+			focus_set(f, confirm_focus_id(c^, .Option), false)
+			return .Changed
+		case button != .Option && e.action == .Invoke:
+			return button == .Accept ? .Accept : .Cancel
+		}
+	}
+	return .None
 }
 
 @(private)

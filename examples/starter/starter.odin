@@ -1,10 +1,11 @@
 // The Cosmos starter: one window with a 16:9 viewer that a renderer outside Cosmos draws into, as a video
 // player would, and a playhead marker over it, in the family's default theme. A right click opens a menu
 // with a Playback speed submenu; Ctrl+O opens videos and Ctrl+S picks where to export, in the system
-// dialogs; a worker probes the chosen videos and hands its results back through an inbox. It follows its
-// display's DPI and keeps drawing while the user drags or sizes its frame. A lost graphics device is made
-// again. It imports nothing but the cosmos collection. Build it with
-// `odin build examples/starter -collection:cosmos=src`.
+// dialogs; a worker probes the chosen videos and hands its results back through an inbox. Every frame it
+// draws it describes to screen readers too: the viewer and the open menus, with the selected row focused,
+// and a screen reader's actions choose, open and select menu rows. It follows its display's DPI and keeps
+// drawing while the user drags or sizes its frame. A lost graphics device is made again. It imports nothing
+// but the cosmos collection. Build it with `odin build examples/starter -collection:cosmos=src`.
 package main
 
 import "base:runtime"
@@ -22,6 +23,8 @@ import "cosmos:ui"
 import d3d "vendor:directx/d3d11"
 
 VIEWER_KEY :: render.IMAGE_KEY_TARGET | 1
+// The viewer's node in the window's accessibility tree.
+VIEWER_ACCESS :: platform.Access_Id(1)
 VIEWER_ASPECT :: f32(16.0 / 9.0)
 // Room around the viewer, in DIPs.
 MARGIN :: 24
@@ -54,6 +57,8 @@ Starter :: struct {
 	speed:         f32,
 	pointer:       [2]f32,
 	menu:          Context_Menu,
+	// What the last drawn frame showed, as screen readers learn it.
+	access:        ui.Access_Tree,
 	// The file dialog while it is open, and what it chooses.
 	pick:          ^platform.File_Pick,
 	pick_mode:     platform.File_Pick_Mode,
@@ -103,6 +108,7 @@ starter_init :: proc(s: ^Starter, driver: render.Driver) -> bool {
 	glyphs.init(&s.cache, s.fonts, s.device)
 	if !ui.text_init(&s.text, s.fonts, &s.cache, TEXT_SIZE * s.scale) {return false}
 	s.theme = ui.theme_from(theme.default(), ui.HOVER_LIFT_DEFAULT, ui.HOVER_GLOSS_DEFAULT)
+	ui.access_init(&s.access)
 	s.list = render.draw_list_init()
 	menu_init(&s.menu)
 	// Dragging or sizing the frame runs the system's modal loop inside poll_events, which then ticks the
@@ -126,6 +132,7 @@ starter_destroy :: proc(s: ^Starter) {
 	delete(s.videos)
 	delete(s.export)
 	menu_destroy(&s.menu)
+	ui.access_destroy(&s.access)
 	render.draw_list_destroy(&s.list)
 	if s.fonts != nil {
 		glyphs.destroy(&s.cache)
@@ -186,6 +193,10 @@ starter_event :: proc(s: ^Starter, event: platform.Event) {
 		case e.key == .Escape:
 			starter_quit(s)
 		}
+	case platform.Access_Invoke_Event:
+		if e.window == s.window {menu_access_invoke(s, e)}
+	case platform.Access_Focus_Event:
+		if e.window == s.window {menu_access_focus(s, e.id)}
 	}
 }
 
@@ -295,7 +306,8 @@ pattern_color :: proc(frame: int) -> [4]f32 {
 }
 
 // Draws the next frame: the stand-in renderer fills the viewer's texture on the device's immediate
-// context, then the window draws the viewer, the marker over it and the menu over everything.
+// context, then the window draws the viewer, the marker over it and the menu over everything, and tells
+// screen readers what it drew.
 starter_frame :: proc(s: ^Starter) {
 	surface := host.surface_get(s.surface)
 	if surface == nil {return}
@@ -315,6 +327,7 @@ starter_frame :: proc(s: ^Starter) {
 	stand_in_render(s.device, s.viewer, pattern_color(int(s.position)))
 	s.position += s.speed
 	if !host.frame_build(&s.list, s.device, Starter_Build{s, viewer}, starter_build) {return}
+	starter_access(s, viewer)
 	#partial switch err := render.frame_render(s.device, surface, &s.list, s.theme.window); err {
 	case .None:
 		// The viewer moves every frame.
@@ -323,6 +336,23 @@ starter_frame :: proc(s: ^Starter) {
 		starter_recover(s)
 	case:
 		log.errorf("rendering a frame failed: %v", err)
+	}
+}
+
+// The frame's accessibility tree: the viewer, then the menus while they show, with focus on the selected
+// row.
+starter_access :: proc(s: ^Starter, viewer: render.Rect) {
+	ui.access_begin(&s.access)
+	video := platform.Access_Node {
+		id     = VIEWER_ACCESS,
+		role   = .Image,
+		name   = "Video",
+		bounds = ui.access_bounds(viewer),
+	}
+	ui.access_add(&s.access, video)
+	focus := menu_access(s)
+	if err := ui.access_commit(&s.access, &s.desktop, s.window, focus); err != .None {
+		log.errorf("describing the frame to screen readers failed: %v", err)
 	}
 }
 

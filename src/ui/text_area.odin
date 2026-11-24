@@ -1,6 +1,7 @@
 package ui
 
 import "cosmos:font"
+import "cosmos:platform"
 import "cosmos:render"
 import "core:math"
 import "core:strings"
@@ -488,6 +489,24 @@ text_area_draw :: proc(
 		}
 	}
 	return .Ok
+}
+
+// Adds the box to the window's semantic tree under `parent` as a Text_Field named `name`, the label the
+// app shows beside it or, without one, its hint. Its value is the whole text, every line of it, empty when
+// the box is blank; Read_Only when `read_only`, for a box the app shows but does not let the user edit.
+// `id` is the box's; when the app registers the box with Focus it passes platform.Access_Id of the box's
+// Focus_Id.
+text_area_access :: proc(
+	box: Text_Area_Box,
+	t: ^Access_Tree,
+	parent, id: platform.Access_Id,
+	name: string,
+	read_only: bool,
+) {
+	states: bit_set[platform.Access_State;u16] = {.Focusable}
+	if read_only {states += {.Read_Only}}
+	access_add(t, {id = id, parent = parent, role = .Text_Field, name = name,
+		value = textedit.to_string(box.buffer), bounds = access_bounds(box.rect), states = states})
 }
 
 // The part of row `row` the selection covers, in the window; false when it covers none. `space` is the

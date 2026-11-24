@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:time"
 import "cosmos:input"
+import "cosmos:platform"
 import "cosmos:render"
 import "cosmos:ui"
 
@@ -19,6 +20,9 @@ Menu_Action :: enum u32 {
 SPEEDS :: [?]f32{0.5, 1, 2}
 // The submenu's width in DIPs.
 SPEED_MENU_WIDTH :: 160
+// The menus' nodes in the window's accessibility tree.
+MENU_ACCESS :: platform.Access_Id(2)
+SPEED_ACCESS :: platform.Access_Id(3)
 
 // The right-click menu over the viewer, with its Playback speed submenu, which opens after the pointer
 // rests on its row (ui.SUBMENU_DELAY) and stays while the pointer heads for it.
@@ -181,4 +185,72 @@ menu_draw :: proc(s: ^Starter) -> render.Build_Status {
 	}
 	if !ui.submenu_shown(&s.menu.submenu) {return .Ok}
 	return ui.menu_draw(&s.menu.submenu.menu, &s.list, &s.text, s.theme, width, height, s.scale, s.pointer)
+}
+
+// Adds the menus while they show and returns the focus: the submenu's selected row, else the menu's.
+menu_access :: proc(s: ^Starter) -> platform.Access_Id {
+	if !s.menu.shown {return 0}
+	width, height := f32(s.width), f32(s.height)
+	sub := &s.menu.submenu
+	ui.menu_access(&s.menu.menu, &s.access, 0, MENU_ACCESS, "Context menu", width, height, s.scale, sub.row)
+	ui.submenu_access(sub, &s.access, MENU_ACCESS, SPEED_ACCESS, "Playback speed", width, height, s.scale)
+	if ui.submenu_shown(sub) {
+		if focus := row_access(&sub.menu, SPEED_ACCESS); focus != 0 {return focus}
+	}
+	return row_access(&s.menu.menu, MENU_ACCESS)
+}
+
+// The selected row's node; a selected separator, which the pointer can rest on, has none.
+@(private = "file")
+row_access :: proc(m: ^ui.Menu, base: platform.Access_Id) -> platform.Access_Id {
+	row := ui.menu_selected(m)
+	if row < 0 || m.items[row].separator {return 0}
+	return ui.access_part(base, u64(row))
+}
+
+// A screen reader's action on a menu row: Invoke chooses it as a click does, and Expand and Collapse open
+// and close the submenu of Playback speed, as Right and Left do.
+menu_access_invoke :: proc(s: ^Starter, e: platform.Access_Invoke_Event) {
+	if !s.menu.shown {return}
+	sub := &s.menu.submenu
+	if row, ok := ui.menu_access_row(&sub.menu, SPEED_ACCESS, e.id); ok && ui.submenu_shown(sub) {
+		if e.action == .Invoke {speed_choose(s, row)}
+		return
+	}
+	row, ok := ui.menu_access_row(&s.menu.menu, MENU_ACCESS, e.id)
+	if !ok {return}
+	item := s.menu.menu.items[row]
+	switch e.action {
+	case .Invoke:
+		menu_choose(s, row)
+	case .Expand:
+		if !item.submenu {return}
+		ui.menu_select(&s.menu.menu, row)
+		menu_choose(s, row)
+	case .Collapse:
+		if open, shown := sub.row.?; shown && open == row {
+			_ = ui.submenu_close(sub)
+			ui.menu_select(&s.menu.menu, row)
+		}
+	case .Toggle:
+	}
+}
+
+// A screen reader moved focus to a menu row, which is selected as the arrow keys would. A row of the menu
+// other than the one the submenu hangs from closes the submenu; that row takes focus back from it.
+menu_access_focus :: proc(s: ^Starter, id: platform.Access_Id) {
+	if !s.menu.shown {return}
+	sub := &s.menu.submenu
+	if row, ok := ui.menu_access_row(&sub.menu, SPEED_ACCESS, id); ok && ui.submenu_shown(sub) {
+		ui.menu_select(&sub.menu, row)
+		return
+	}
+	row, ok := ui.menu_access_row(&s.menu.menu, MENU_ACCESS, id)
+	if !ok {return}
+	ui.menu_select(&s.menu.menu, row)
+	if open, shown := sub.row.?; shown && open == row {
+		ui.menu_select(&sub.menu, -1)
+	} else {
+		_ = ui.submenu_close(sub)
+	}
 }

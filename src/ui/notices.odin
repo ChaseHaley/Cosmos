@@ -1,5 +1,6 @@
 package ui
 
+import "cosmos:platform"
 import "cosmos:render"
 import "core:math"
 import "core:strconv"
@@ -343,10 +344,17 @@ notices_press :: proc(n: ^Notices, button: Notice_Button) {
 notices_release :: proc(n: ^Notices, button: Notice_Button, enabled: bool) -> (dismissed: bool, acted: u32) {
 	fired, ok := armed_release(&n.armed, button)
 	if !ok || fired.id == 0 {return}
-	if fired.action {
-		for item in notices_live(n) {if item.id == fired.id {acted = item.key}}
+	return notices_fire(n, fired, enabled)
+}
+
+// Presses a notice's button, by pointer or assistive technology: either dismisses its notice, and an action
+// also returns the notice's key.
+@(private = "file")
+notices_fire :: proc(n: ^Notices, button: Notice_Button, enabled: bool) -> (dismissed: bool, acted: u32) {
+	if button.action {
+		for item in notices_live(n) {if item.id == button.id {acted = item.key}}
 	}
-	return notices_dismiss(n, fired.id, enabled), acted
+	return notices_dismiss(n, button.id, enabled), acted
 }
 
 // The pointer left the notices' window or they moved to another: no hover, no press, and the deck
@@ -536,6 +544,73 @@ notices_action_rect :: proc(n: ^Notices, text: ^Text, width, height, scale: f32,
 		return action
 	}
 	return {}
+}
+
+// A notice's buttons, as parts of its node.
+@(private = "file")
+NOTICE_ACCESS_ACTION :: 1
+@(private = "file")
+NOTICE_ACCESS_DISMISS :: 2
+
+// Adds the shown notices to the window's semantic tree under `parent`, as notices_draw places them for a
+// `width` by `height` window, oldest first as the open deck stacks them down. Each card that shows is a
+// Status named by its text, so assistive technology reads a new notice out. While its content shows it
+// holds its action as a Button named by the action's label and its close button as "Dismiss". The
+// action's chord is left out: the platform has no place for a shortcut, and the name is what is pressed.
+//
+// A notice's node is access_part(id, notice id) for `id` the deck's, and its buttons are parts of that.
+notices_access :: proc(
+	n: ^Notices,
+	t: ^Access_Tree,
+	text: ^Text,
+	parent, id: platform.Access_Id,
+	width, height, scale: f32,
+) {
+	_ = notices_place(n, text, width, height, scale)
+	card_width := notice_card_width(width, scale)
+	if text.fonts == nil || card_width <= 0 {return}
+	for item in notices_live(n) {
+		if item.card.panel <= 0 || item.card.box.width <= 0 {continue}
+		rise := notice_fade_of(item, RISE_NOTICE * scale).rise
+		box := item.card.box
+		box.y += rise
+		node := access_part(id, item.id)
+		access_add(t, {id = node, parent = parent, role = .Status, name = item.text, bounds = access_bounds(box)})
+		if item.card.content <= 0 {continue}
+		l := notice_layout(item, text, item.card.box, card_width, scale, &n.lines)
+		if l.action.width > 0 {
+			action := l.action
+			action.y += rise
+			access_add(t, {id = access_part(node, NOTICE_ACCESS_ACTION), parent = node, role = .Button,
+				name = item.action, bounds = access_bounds(action)})
+		}
+		dismiss := l.close
+		dismiss.y += rise
+		access_add(t, {id = access_part(node, NOTICE_ACCESS_DISMISS), parent = node, role = .Button,
+			name = "Dismiss", bounds = access_bounds(dismiss)})
+	}
+}
+
+// Does what assistive technology asked of a button notices_access added under `id`, as releasing a press
+// on it does (see notices_release); anything else does nothing.
+notices_access_invoke :: proc(
+	n: ^Notices,
+	id: platform.Access_Id,
+	e: platform.Access_Invoke_Event,
+	enabled: bool,
+) -> (
+	dismissed: bool,
+	acted: u32,
+) {
+	if e.action != .Invoke {return}
+	for item in notices_live(n) {
+		node := access_part(id, item.id)
+		if item.action != "" && e.id == access_part(node, NOTICE_ACCESS_ACTION) {
+			return notices_fire(n, {item.id, true}, enabled)
+		}
+		if e.id == access_part(node, NOTICE_ACCESS_DISMISS) {return notices_fire(n, {item.id, false}, enabled)}
+	}
+	return
 }
 
 // Fades expired notices and reports whether any began to fade. Nothing expires while paused.

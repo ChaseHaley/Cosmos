@@ -375,7 +375,13 @@ find_mouse :: proc(f: ^Find_Bar, l: Find_Layout, enabled: bool, button: input.Mo
 	}
 	fired, ok := armed_release(&f.armed, hit)
 	if !ok { return Find_Change.Moved }
-	switch fired {
+	return find_fire(f, fired)
+}
+
+// What pressing `button` does, by pointer or assistive technology; None presses nothing.
+@(private = "file")
+find_fire :: proc(f: ^Find_Bar, button: Find_Button) -> Find_Outcome {
+	switch button {
 	case .None:
 	case .Up:
 		return search.Step.Up
@@ -384,9 +390,16 @@ find_mouse :: proc(f: ^Find_Bar, l: Find_Layout, enabled: bool, button: input.Mo
 	case .Close:
 		return Find_Change.Closed
 	case .Case_Toggle, .Regex_Toggle:
-		return find_toggle(f, fired)
+		return find_toggle(f, button)
 	}
 	return Find_Change.Moved
+}
+
+// The layout find_draw draws the bar and `status` in.
+@(private = "file")
+find_draw_layout :: proc(base: ^Text, status: string, width, scale: f32) -> Find_Layout {
+	count := text_styled(base, .Detail)
+	return find_layout(width, scale, text_width(&count, status))
 }
 
 // Draws the bar with `status` (such as "3 of 17") right-aligned after the query.
@@ -402,7 +415,7 @@ find_draw :: proc(
 ) -> render.Build_Status {
 	input_text := text_styled(base, .Body)
 	count := text_styled(base, .Detail)
-	l := find_layout(width, scale, text_width(&count, status))
+	l := find_draw_layout(base, status, width, scale)
 	panel := l.panel
 	if panel.width <= 2 * FIND_PADDING * scale { return .Ok }
 	if render.push_layer(list, {0, 0, width, height}) != .None {
@@ -458,5 +471,105 @@ find_draw :: proc(
 		style       = .Body,
 		scale       = scale,
 	}
-	return field_box_draw(box, list, theme, field_box_baseline(box), find_has_keyboard(f), "Find")
+	return field_box_draw(box, list, theme, field_box_baseline(box), find_has_keyboard(f), FIND_HINT)
+}
+
+// The name assistive technology reads for each of the bar's buttons. The arrows take the names of the keys
+// FIND_KEYS gives them, Shift+Enter and Enter, while they move up and down the screen as a click does.
+@(rodata, private = "file")
+FIND_ACCESS_NAMES := #partial [Find_Button]string {
+	.Up           = "Previous match",
+	.Down         = "Next match",
+	.Close        = "Close",
+	.Case_Toggle  = "Match case",
+	.Regex_Toggle = "Regular expression",
+}
+
+// The query's hint, which also names it to assistive technology.
+@(private = "file")
+FIND_HINT :: "Find"
+
+// The parts of the bar's access tree besides its buttons, whose parts are their Find_Button values.
+@(private = "file")
+FIND_ACCESS_GROUP :: max(u64)
+@(private = "file")
+FIND_ACCESS_STATUS :: max(u64) - 1
+
+// Adds the open bar to the window's semantic tree under `parent`, as find_draw lays it out with the same
+// `status`, `enabled`, `width` and `scale`: a Group named `name` holding the query, a Text_Field named
+// "Find" as its hint says, then its toggles as Check_Boxes, `status` as a Status so a new count is read
+// out, and the arrows and the close button as Buttons; the arrows are Disabled unless `enabled`.
+//
+// `id` is the query's; when the app registers the bar with Focus it passes platform.Access_Id of that
+// Focus_Id, and gives the bar the keyboard with find_focus when assistive technology focuses `id`.
+find_access :: proc(
+	f: ^Find_Bar,
+	t: ^Access_Tree,
+	base: ^Text,
+	parent, id: platform.Access_Id,
+	name, status: string,
+	enabled: bool,
+	width, scale: f32,
+) {
+	if f.state == nil { return }
+	l := find_draw_layout(base, status, width, scale)
+	if l.panel.width <= 2 * FIND_PADDING * scale { return }
+	group := access_part(id, FIND_ACCESS_GROUP)
+	access_add(t, {id = group, parent = parent, role = .Group, name = name, bounds = access_bounds(l.panel)})
+	if l.query.width > 0 {
+		access_add(t, {id = id, parent = group, role = .Text_Field, name = FIND_HINT,
+			value = field_string(&f.query), bounds = access_bounds(l.query), states = {.Focusable}})
+	}
+	toggles := [?]struct {
+		area:   render.Rect,
+		button: Find_Button,
+		on:     bool,
+	} {
+		{l.case_toggle, .Case_Toggle, f.options.case_sensitive},
+		{l.regex_toggle, .Regex_Toggle, f.options.regex},
+	}
+	for toggle in toggles {
+		if toggle.area.width <= 0 { continue }
+		states: bit_set[platform.Access_State;u16]
+		if toggle.on { states += {.Checked} }
+		access_add(t, {id = access_part(id, u64(toggle.button)), parent = group, role = .Check_Box,
+			name = FIND_ACCESS_NAMES[toggle.button], bounds = access_bounds(toggle.area), states = states})
+	}
+	if status != "" && l.status.width > 0 {
+		access_add(t, {id = access_part(id, FIND_ACCESS_STATUS), parent = group, role = .Status, name = status,
+			bounds = access_bounds(l.status)})
+	}
+	buttons := [?]struct {
+		area:   render.Rect,
+		button: Find_Button,
+		live:   bool,
+	} {{l.up, .Up, enabled}, {l.down, .Down, enabled}, {l.close, .Close, true}}
+	for b in buttons {
+		if b.area.width <= 0 { continue }
+		states: bit_set[platform.Access_State;u16]
+		if !b.live { states += {.Disabled} }
+		access_add(t, {id = access_part(id, u64(b.button)), parent = group, role = .Button,
+			name = FIND_ACCESS_NAMES[b.button], bounds = access_bounds(b.area), states = states})
+	}
+}
+
+// Does what assistive technology asked of a node find_access added under `id`, as clicking it does: Invoke
+// on a button and Toggle on a toggle give the bar the keyboard and return the click's outcome. A disabled
+// arrow, a closed bar and any other request do nothing.
+find_access_invoke :: proc(
+	f: ^Find_Bar,
+	id: platform.Access_Id,
+	e: platform.Access_Invoke_Event,
+	enabled: bool,
+) -> Find_Outcome {
+	if f.state == nil { return Find_Change.None }
+	for button in Find_Button {
+		if button == .None || e.id != access_part(id, u64(button)) { continue }
+		toggle := button == .Case_Toggle || button == .Regex_Toggle
+		if e.action != (toggle ? platform.Access_Action.Toggle : .Invoke) { return Find_Change.None }
+		if !enabled && (button == .Up || button == .Down) { return Find_Change.None }
+		find_focus(f)
+		return find_fire(f, button)
+	}
+	return Find_Change.None
 }

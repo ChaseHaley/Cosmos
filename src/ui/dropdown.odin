@@ -18,6 +18,10 @@ DROPDOWN_REGEX_WIDTH :: f32(FIND_TOGGLE)
 DROPDOWN_INVALID_TEXT :: "Invalid regular expression"
 @(private = "file")
 DROPDOWN_EMPTY_TEXT :: "No fonts found"
+@(private = "file")
+DROPDOWN_FONTS_TEXT :: "Show all fonts"
+@(private = "file")
+DROPDOWN_REGEX_NAME :: "Regular expression"
 
 // The one dropdown a setting's choices open in, on the Settings page and in the everything palette.
 // It keeps what is open: the highlighted option and the first shown, the search a long list such
@@ -290,6 +294,25 @@ dropdown_toggle_rect :: proc(c: Dropdown_Choices, popup: render.Rect, scale: f32
 	s := scale
 	pad := OVERLAY_PADDING * s
 	return {popup.x + pad, popup.y + pad + DROPDOWN_SEARCH_HEIGHT * s, popup.width - 2 * pad, CHOICE_HEIGHT * s}
+}
+
+// The search field's hint, which also names it to assistive technology.
+@(private = "file")
+dropdown_placeholder :: proc(c: Dropdown_Choices) -> string {
+	return c.placeholder != "" ? c.placeholder : "Search fonts"
+}
+
+// Where the option at shown row `row` draws, in `options`, the popup below its header; the options end at
+// `right`.
+@(private = "file")
+dropdown_option_rect :: proc(options: render.Rect, right: f32, row: int, scale: f32) -> render.Rect {
+	pad := OVERLAY_PADDING * scale
+	return {
+		options.x + pad,
+		options.y + pad + f32(row) * CHOICE_HEIGHT * scale,
+		right - options.x - pad,
+		CHOICE_HEIGHT * scale,
+	}
 }
 
 dropdown_scrollbar :: proc(
@@ -604,7 +627,7 @@ dropdown_draw :: proc(
 		box_draw(list, field, theme, !d.toggle_focus, s)
 		box := dropdown_search_box(d, c, r, text, s)
 		if result := field_box_draw(box, list, theme, field_box_baseline(box), !d.toggle_focus,
-			c.placeholder != "" ? c.placeholder : "Search fonts");
+			dropdown_placeholder(c));
 		   result != .Ok {return result}
 		if regex := dropdown_regex_in(c, r, s); regex.width > 0 {
 			over := d.regex_hover
@@ -633,7 +656,7 @@ dropdown_draw :: proc(
 				switch_h,
 			}
 			switch_draw(list, switch_rect, c.show_all_fonts, d.toggle_focus, theme, s)
-			if result := draw_text(text, list, "Show all fonts", toggle.x + CONTROL_INSET * s,
+			if result := draw_text(text, list, DROPDOWN_FONTS_TEXT, toggle.x + CONTROL_INSET * s,
 			                       toggle.y + (toggle.height - text.line_height) / 2 + text.ascent,
 			                       theme.text, switch_rect.x - toggle.x - 2 * CONTROL_INSET * s);
 			   result != .Ok {return result}
@@ -648,17 +671,11 @@ dropdown_draw :: proc(
 		}
 	}
 	right := dropdown_option_right(d, c, a, r, s)
-	pad := OVERLAY_PADDING * s
 	for shown in 0 ..< count {
 		i := d.list.scroll + shown
 		if i >= dropdown_count(d, c) {break}
 		source := dropdown_source(d, c, i)
-		option := render.Rect {
-			r.x + pad,
-			r.y + pad + f32(shown) * CHOICE_HEIGHT * s,
-			right - r.x - pad,
-			CHOICE_HEIGHT * s,
-		}
+		option := dropdown_option_rect(r, right, shown, s)
 		if i == d.list.index {
 			draw_rect(list, {rect = option, color = theme.selection, radius = RADIUS_CONTROL * s})
 		}
@@ -705,6 +722,155 @@ dropdown_draw :: proc(
 		scrollbar_draw(list, theme, bar, scrollbar_state(d.bar_hover, d.drag.(Scroll_Drag) or_else Scroll_Drag{}))
 	}
 	return .Ok
+}
+
+// The parts of a dropdown's access tree besides its options, whose parts are their indexes into `choices`,
+// so these sit at the top of the range where no index reaches.
+@(private = "file")
+DROPDOWN_ACCESS_LIST :: max(u64)
+@(private = "file")
+DROPDOWN_ACCESS_SEARCH :: max(u64) - 1
+@(private = "file")
+DROPDOWN_ACCESS_REGEX :: max(u64) - 2
+@(private = "file")
+DROPDOWN_ACCESS_FONTS :: max(u64) - 3
+@(private = "file")
+DROPDOWN_ACCESS_EMPTY :: max(u64) - 4
+
+// What an assistive technology asked of a dropdown: Dropdown_Open asks the owner to open the list, as a
+// press on its closed field does; a Dropdown_Outcome is what the open list did, as from dropdown_press.
+Dropdown_Access_Outcome :: union #no_nil {
+	Dropdown_Outcome,
+	Dropdown_Open,
+}
+
+Dropdown_Open :: struct {}
+
+// Adds the dropdown to the window's semantic tree under `parent`: a Combo_Box named `name` (the setting
+// it chooses) whose value is `value`, the label its field draws. While `open` the Combo_Box holds what
+// the list draws: the search field (named by its hint) with its `.*` toggle and the Show all fonts switch
+// when the choices have them, then a List of the shown options, each named by its label (Selected is the
+// highlighted option, Checked an option a multiple choice marks), or the text an empty search shows. It
+// follows dropdown_draw in the frame, whose measurements a list with `rows` lays out by.
+//
+// `id` is the Combo_Box's; when the app registers the field with Focus it passes platform.Access_Id of
+// the field's Focus_Id. An option's id is access_part(id, i) for its index i into `choices`, so it keeps
+// its id while a search filters the list.
+dropdown_access :: proc(
+	d: ^Dropdown,
+	c: Dropdown_Choices,
+	a: Dropdown_Anchor,
+	t: ^Access_Tree,
+	parent, id: platform.Access_Id,
+	name, value: string,
+	open: bool,
+	scale: f32,
+) {
+	combo: bit_set[platform.Access_State;u16] = {.Focusable}
+	if open {combo += {.Expanded}} else {combo += {.Collapsed}}
+	access_add(t, {id = id, parent = parent, role = .Combo_Box, name = name, value = value,
+		bounds = access_bounds(a.field), states = combo})
+	if !open {return}
+	r := dropdown_rect(d, c, a, scale)
+	if r.width == 0 {return}
+	s := scale
+	if c.searchable {
+		access_add(t, {id = access_part(id, DROPDOWN_ACCESS_SEARCH), parent = id, role = .Text_Field,
+			name = dropdown_placeholder(c), value = field_string(&d.search),
+			bounds = access_bounds(dropdown_search_rect(r, s))})
+	}
+	if regex := dropdown_regex_in(c, r, s); regex.width > 0 {
+		states: bit_set[platform.Access_State;u16]
+		if d.regex {states += {.Checked}}
+		access_add(t, {id = access_part(id, DROPDOWN_ACCESS_REGEX), parent = id, role = .Check_Box,
+			name = DROPDOWN_REGEX_NAME, bounds = access_bounds(regex), states = states})
+	}
+	if fonts := dropdown_toggle_rect(c, r, s); fonts.width > 0 {
+		states: bit_set[platform.Access_State;u16]
+		if c.show_all_fonts {states += {.Checked}}
+		access_add(t, {id = access_part(id, DROPDOWN_ACCESS_FONTS), parent = id, role = .Check_Box,
+			name = DROPDOWN_FONTS_TEXT, bounds = access_bounds(fonts), states = states})
+	}
+	header := dropdown_header(c, s)
+	options := render.Rect{r.x, r.y + header, r.width, r.height - header}
+	if empty := dropdown_empty_text(d, c); c.searchable && empty != "" {
+		access_add(t, {id = access_part(id, DROPDOWN_ACCESS_EMPTY), parent = id, role = .Text, name = empty,
+			bounds = access_bounds(options)})
+		return
+	}
+	list := access_part(id, DROPDOWN_ACCESS_LIST)
+	access_add(t, {id = list, parent = id, role = .List, name = name, bounds = access_bounds(options)})
+	right := dropdown_option_right(d, c, a, options, s)
+	count := dropdown_count(d, c)
+	for row in 0 ..< dropdown_rows(d, c, a, s) {
+		i := d.list.scroll + row
+		if i >= count {break}
+		source := dropdown_source(d, c, i)
+		states: bit_set[platform.Access_State;u16]
+		if i == d.list.index {states += {.Selected}}
+		if c.multiple && source < len(c.marked) && c.marked[source] {states += {.Checked}}
+		access_add(t, {id = access_part(id, u64(source)), parent = list, role = .List_Item,
+			name = dropdown_label(c, source), bounds = access_bounds(dropdown_option_rect(options, right, row, s)),
+			states = states})
+	}
+}
+
+// The node the open list's keyboard is on, for access_commit: the Show all fonts switch after Tab moved
+// there, else the highlighted option, else the Combo_Box `id`.
+dropdown_access_focus :: proc(
+	d: ^Dropdown,
+	c: Dropdown_Choices,
+	id: platform.Access_Id,
+) -> platform.Access_Id {
+	if c.searchable && c.font_filter && d.toggle_focus {return access_part(id, DROPDOWN_ACCESS_FONTS)}
+	if source := dropdown_highlighted(d, c); source >= 0 {return access_part(id, u64(source))}
+	return id
+}
+
+// Does what assistive technology asked of a node dropdown_access added under `id`, as the pointer and keys
+// would: Expand on the closed Combo_Box asks to open it and Collapse on the open one closes it as Escape
+// does; in the open list, Invoke on an option highlights and chooses it as a press does, and Toggle
+// operates the `.*` toggle or the Show all fonts switch. Anything else does nothing.
+dropdown_access_invoke :: proc(
+	d: ^Dropdown,
+	c: Dropdown_Choices,
+	id: platform.Access_Id,
+	e: platform.Access_Invoke_Event,
+	open: bool,
+) -> Dropdown_Access_Outcome {
+	if e.id == id {
+		if e.action == .Expand && !open {return Dropdown_Open{}}
+		if e.action == .Collapse && open {return Dropdown_Outcome.Closed}
+		return Dropdown_Outcome.None
+	}
+	if !open {return Dropdown_Outcome.None}
+	regex, fonts := access_part(id, DROPDOWN_ACCESS_REGEX), access_part(id, DROPDOWN_ACCESS_FONTS)
+	switch {
+	case e.action == .Toggle && e.id == regex && c.searchable && c.regex_toggle:
+		dropdown_regex_flip(d, c)
+		return Dropdown_Outcome.Changed
+	case e.action == .Toggle && e.id == fonts && c.searchable && c.font_filter:
+		d.toggle_focus = true
+		return Dropdown_Outcome.Font_Filter
+	case e.action == .Invoke:
+		return dropdown_access_choose(d, c, id, e.id)
+	}
+	return Dropdown_Outcome.None
+}
+
+// Chooses the shown option whose node is `option`; None when no shown option has that id.
+@(private = "file")
+dropdown_access_choose :: proc(
+	d: ^Dropdown,
+	c: Dropdown_Choices,
+	id, option: platform.Access_Id,
+) -> Dropdown_Outcome {
+	for i in 0 ..< dropdown_count(d, c) {
+		if access_part(id, u64(dropdown_source(d, c, i))) != option {continue}
+		d.list.index = i
+		return .Chosen
+	}
+	return .None
 }
 
 // Indexes of the choices whose label, or value when unlabelled, contains `query` ignoring case.
