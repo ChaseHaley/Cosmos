@@ -336,6 +336,8 @@ struct Cosmos_Webview {
     float applied_scale = 0.0f;
     COREWEBVIEW2_PREFERRED_COLOR_SCHEME color_scheme = COREWEBVIEW2_PREFERRED_COLOR_SCHEME_AUTO;
     double zoom = 1.0;
+    // How much the visual is drawn shrunk, about its top left, as when the app scales its whole frame.
+    float visual_scale = 1.0f;
 
     std::wstring pending_url;
     bool creating = false;
@@ -431,8 +433,16 @@ static void apply_placement(Cosmos_Webview *v) {
         }
     }
 
-    v->visual->SetOffsetX(static_cast<float>(v->vis_x));
-    v->visual->SetOffsetY(static_cast<float>(v->vis_y));
+    // One matrix carries the scale and the place, so the clip, given in the page's own pixels, scales with
+    // the page and nothing depends on the order DirectComposition applies an offset and a transform in.
+    v->visual->SetOffsetX(0.0f);
+    v->visual->SetOffsetY(0.0f);
+    D2D_MATRIX_3X2_F transform{};
+    transform._11 = v->visual_scale;
+    transform._22 = v->visual_scale;
+    transform._31 = static_cast<float>(v->vis_x);
+    transform._32 = static_cast<float>(v->vis_y);
+    v->visual->SetTransform(transform);
     if (v->clip) {
         v->clip->SetLeft(v->clip_l);
         v->clip->SetTop(v->clip_t);
@@ -1242,6 +1252,12 @@ void cosmos_webview_set_zoom(void *raw, double zoom) noexcept {
     auto *v = static_cast<Cosmos_Webview *>(raw);
     v->zoom = zoom;
     if (v->controller) v->controller->put_ZoomFactor(zoom);
+}
+
+// Takes effect at the next cosmos_webview_set_placement.
+void cosmos_webview_set_visual_scale(void *raw, float scale) noexcept {
+    if (!raw || scale <= 0.0f) return;
+    static_cast<Cosmos_Webview *>(raw)->visual_scale = scale;
 }
 
 void cosmos_webview_navigate(void *raw, const wchar_t *url) noexcept {

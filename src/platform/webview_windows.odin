@@ -86,6 +86,7 @@ when !HEADLESS {
 		) ---
 		cosmos_webview_set_color_scheme :: proc(view: rawptr, scheme: i32) ---
 		cosmos_webview_set_zoom :: proc(view: rawptr, zoom: f64) ---
+		cosmos_webview_set_visual_scale :: proc(view: rawptr, scale: f32) ---
 		cosmos_webview_navigate :: proc(view: rawptr, url: cstring16) ---
 		cosmos_webview_go_back :: proc(view: rawptr) ---
 		cosmos_webview_go_forward :: proc(view: rawptr) ---
@@ -272,6 +273,12 @@ when !HEADLESS {
 
 	webview_set_zoom :: proc(view: Webview, zoom: f64) {
 		if view != nil {cosmos_webview_set_zoom(rawptr(view), zoom)}
+	}
+
+	// Draws the view's visual shrunk by `scale` about the corner webview_set_placement puts at `vis_x`,
+	// `vis_y`; the clip is in the page's own pixels and shrinks with it. Takes effect at the next placement.
+	webview_set_visual_scale :: proc(view: Webview, scale: f32) {
+		if view != nil {cosmos_webview_set_visual_scale(rawptr(view), scale)}
 	}
 
 	webview_navigate :: proc(view: Webview, url: string) {
