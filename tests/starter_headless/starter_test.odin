@@ -173,3 +173,29 @@ menu_keys_open_the_submenu_and_escape_closes_before_quitting :: proc(t: ^testing
 	key(&s, .Escape)
 	testing.expect(t, s.run == .Quit, "Escape with no menu quits")
 }
+
+// Moving the window onto a 144 DPI display scales the starter by 1.5: the menu's text grows, an open menu
+// closes, and a menu opened there lays its rows out at the new scale, so a click on its Quit row quits.
+@(test)
+moving_to_a_display_of_another_dpi_rescales_the_starter :: proc(t: ^testing.T) {
+	s: starter.Starter
+	if !open(t, &s) {return}
+	defer starter.starter_destroy(&s)
+	displays := []platform.Display {
+		{rect = {0, 0, 1920, 1080}, dpi = 96},
+		{rect = {1920, 0, 3840, 2160}, dpi = 144},
+	}
+	testing.expect_value(t, platform.set_displays(&s.desktop, displays), platform.Error.None)
+	press(&s, .Right, {100, 100})
+	if !testing.expect(t, s.menu.shown, "a right click opened no menu") {return}
+	testing.expect_value(t, platform.window_set_position(&s.desktop, s.window, 2400, 100), platform.Error.None)
+	starter.starter_tick(&s)
+	testing.expect_value(t, s.scale, f32(1.5))
+	testing.expect_value(t, s.text.size_px, f32(starter.TEXT_SIZE * 1.5))
+	testing.expect(t, !s.menu.shown, "the menu placed at the old scale stayed open")
+
+	press(&s, .Right, {100, 100})
+	quit := ui.menu_row_rect(&s.menu.menu, 5, f32(s.width), f32(s.height), 1.5)
+	press(&s, .Left, {quit.x + quit.width / 2, quit.y + quit.height / 2})
+	testing.expect(t, s.run == .Quit, "a click on Quit at the new scale missed it")
+}

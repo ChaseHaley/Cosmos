@@ -1,11 +1,13 @@
 // The Cosmos starter: one window with a 16:9 viewer that a renderer outside Cosmos draws into, as a video
 // player would, and a playhead marker over it, in the family's default theme. A right click opens a menu
 // with a Playback speed submenu; Ctrl+O opens videos and Ctrl+S picks where to export, in the system
-// dialogs; a worker probes the chosen videos and hands its results back through an inbox. A lost graphics
-// device is made again. It imports nothing but the cosmos collection. Build it with
+// dialogs; a worker probes the chosen videos and hands its results back through an inbox. It follows its
+// display's DPI and keeps drawing while the user drags or sizes its frame. A lost graphics device is made
+// again. It imports nothing but the cosmos collection. Build it with
 // `odin build examples/starter -collection:cosmos=src`.
 package main
 
+import "base:runtime"
 import "core:log"
 import "core:math"
 import "core:strings"
@@ -80,6 +82,8 @@ main :: proc() {
 	}
 }
 
+// The platform keeps a pointer to `s` for its modal size/move loop, so `s` must stay where it is until
+// starter_destroy.
 @(require_results)
 starter_init :: proc(s: ^Starter, driver: render.Driver) -> bool {
 	if platform.init(&s.desktop, "CosmosStarter") != .Primary {return false}
@@ -87,7 +91,7 @@ starter_init :: proc(s: ^Starter, driver: render.Driver) -> bool {
 	if window_error != .None {return false}
 	s.window, s.driver, s.speed = window, driver, 1
 	s.width, s.height, _ = platform.window_client_size(&s.desktop, window)
-	s.scale = f32(max(platform.window_dpi(&s.desktop, window), 96)) / 96
+	s.scale = starter_scale(platform.window_dpi(&s.desktop, window))
 	device_error: render.Error
 	s.device, device_error = render.device_create(driver)
 	if device_error != .None {return false}
@@ -101,6 +105,15 @@ starter_init :: proc(s: ^Starter, driver: render.Driver) -> bool {
 	s.theme = ui.theme_from(theme.default(), ui.HOVER_LIFT_DEFAULT, ui.HOVER_GLOSS_DEFAULT)
 	s.list = render.draw_list_init()
 	menu_init(&s.menu)
+	// Dragging or sizing the frame runs the system's modal loop inside poll_events, which then ticks the
+	// starter from a timer so the window keeps drawing; that tick polls the events the loop has queued.
+	modal_tick :: proc(user: rawptr) {
+		// Each tick frees its own temporary memory, which a long drag would pile up, and keeps what the
+		// iteration around the poll had already taken.
+		runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+		starter_tick((^Starter)(user))
+	}
+	platform.set_modal_loop_callback(&s.desktop, modal_tick, s)
 	return probe_start(&s.probe, host.waker_platform(&s.desktop))
 }
 
@@ -121,6 +134,11 @@ starter_destroy :: proc(s: ^Starter) {
 	host.surface_release(&s.surface)
 	if s.device != nil {render.device_destroy(s.device)}
 	_ = platform.destroy(&s.desktop)
+}
+
+// DIPs to pixels on a display of `dpi`; a DPI below 96, as an unknown one of 0, counts as 96.
+starter_scale :: proc(dpi: u32) -> f32 {
+	return f32(max(dpi, 96)) / 96
 }
 
 // One turn of the loop: OS events, the dialog, the probe's results and the menu's timers, then a frame.
@@ -145,6 +163,12 @@ starter_event :: proc(s: ^Starter, event: platform.Event) {
 		if host.surface_resize(&s.surface, s.device, max(s.width, 1), max(s.height, 1), sizing) == .Device_Lost {
 			starter_recover(s)
 		}
+	case platform.Dpi_Event:
+		if e.window != s.window {return}
+		s.scale = starter_scale(e.dpi)
+		ui.text_set_size(&s.text, TEXT_SIZE * s.scale)
+		// An open submenu hangs where the old scale placed it, so the menus close rather than drift.
+		menu_close(s)
 	case input.Mouse_Move_Event:
 		s.pointer = {f32(e.x), f32(e.y)}
 		menu_hover(s, s.pointer, host.clock_now(&s.clock))
