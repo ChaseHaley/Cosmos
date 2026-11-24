@@ -36,10 +36,17 @@ image_epoch :: proc(d: ^Device) -> u64 {
 	return d.image_epoch
 }
 
-// image_upload creates a texture from premultiplied RGBA. A failure is recorded and logged here
-// rather than returned: one bad image must not stop the terminal drawing.
+// image_upload creates a texture from premultiplied RGBA, replacing any texture the key named. A failure
+// is recorded and logged here rather than returned: one bad image must not stop the terminal drawing.
 image_upload :: proc(d: ^Device, key: u64, width, height: int, pixels: []u8) {
+	// A target's foreign renderer may still be drawing into it, so an upload must never free one.
+	assert(key & (IMAGE_KEY_RENDERED | IMAGE_KEY_TARGET) == 0, "image_upload keys set neither key bit")
 	assert(len(pixels) == width * height * 4)
+	if old, known := d.images[key]; known {
+		d.image_bytes -= old.bytes
+		image_release(&old)
+		delete_key(&d.images, key)
+	}
 	entry := Image_Texture {
 		last_used = d.image_frame,
 	}

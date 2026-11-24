@@ -225,6 +225,21 @@ budget_evicts_undrawn_textures_oldest_first_but_never_a_drawn_one :: proc(t: ^te
 	testing.expect(t, render.image_known(f.device, 3))
 }
 
+// A re-upload replaces the texture, so the budget counts it once rather than evicting other images early.
+@(test)
+reuploaded_key_counts_one_texture_against_the_budget :: proc(t: ^testing.T) {
+	f, ok := fixture_create(t, 2, 2)
+	if !ok {return}
+	defer fixture_destroy(&f)
+	upload_corners(&f, 1)
+	once := f.device.image_bytes
+	testing.expect(t, once > 0)
+	upload_corners(&f, 1)
+	testing.expect_value(t, f.device.image_bytes, once)
+	testing.expect_value(t, len(f.device.images), 1)
+	testing.expect(t, render.image_known(f.device, 1))
+}
+
 // An image wider than the GPU allows is refused once, so the frame neither retries nor fails.
 @(test)
 image_too_large_for_a_texture_is_settled_and_draws_nothing :: proc(t: ^testing.T) {
