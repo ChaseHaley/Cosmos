@@ -41,7 +41,7 @@ warm_fonts :: proc(
 			clear(&out)
 			if font.shape(s, family, .Regular, c.stored, 20, &out) != .None { continue }
 			for g in out {
-				bitmap, _ := font.glyph_rasterize(s, g.glyph, 20, context.allocator, color = true)
+				bitmap, _ := font.glyph_rasterize(s, g.glyph, 20, context.allocator, [3]f32{1, 1, 1})
 				font.bitmap_destroy(&bitmap, context.allocator)
 			}
 		}

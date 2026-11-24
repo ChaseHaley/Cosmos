@@ -4,6 +4,7 @@ import "core:testing"
 import "cosmos:font"
 import "cosmos:glyphs"
 import "cosmos:render"
+import "cosmos:test_fonts"
 
 Fixture :: struct {
 	fonts: ^font.System,
@@ -105,4 +106,30 @@ atlas_reset_invalidates_entries :: proc(t: ^testing.T) {
 	testing.expect_value(t, result, render.Build_Status.Ok)
 	testing.expect_value(t, after.size, before.size)
 	testing.expect_value(t, after.atlas.x + after.atlas.y, 0)
+}
+
+// An emoji whose layers all name palette colours keeps one entry whatever ink it is drawn in, so
+// animating a hover colour does not rasterize it again.
+@(test)
+palette_color_glyphs_share_one_entry_across_inks :: proc(t: ^testing.T) {
+	fonts, err := font.system_create_private(test_fonts.files())
+	if !testing.expect_value(t, err, font.Error.None) {return}
+	defer font.system_destroy(fonts)
+	emoji, emoji_err := font.family_load(fonts, test_fonts.EMOJI)
+	if !testing.expect_value(t, emoji_err, font.Error.None) {return}
+	g, found := font.glyph_lookup(fonts, emoji, .Regular, 0x1f600)
+	if !testing.expect(t, found) {return}
+	device, device_err := render.device_create(.Warp)
+	if !testing.expect_value(t, device_err, render.Error.None) {return}
+	defer render.device_destroy(device)
+	cache: glyphs.Cache
+	glyphs.init(&cache, fonts, device)
+	defer glyphs.destroy(&cache)
+	red, red_result := glyphs.glyph(&cache, g, 24, [3]f32{1, 0, 0})
+	testing.expect_value(t, red_result, render.Build_Status.Ok)
+	testing.expect(t, red.color && !red.foreground)
+	blue, _ := glyphs.glyph(&cache, g, 24, [3]f32{0, 0, 1})
+	testing.expect_value(t, blue, red)
+	hits, misses := glyphs.glyph_counts(&cache)
+	testing.expect_value(t, [2]u64{hits, misses}, [2]u64{1, 1})
 }

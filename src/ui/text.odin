@@ -428,7 +428,7 @@ draw_cluster_centered :: proc(
 	baseline := math.round(area.y + (area.height - m.ascent - m.descent) / 2 + m.ascent)
 	pen := area.x + (area.width - width * fit) / 2
 	for g in shaped {
-		entry, result := glyphs.glyph(t.cache, g.glyph, draw_size, true)
+		entry, result := glyphs.glyph(t.cache, g.glyph, draw_size, foreground = c.rgb)
 		if result != .Ok {return result}
 		if entry.size.x > 0 {
 			at := render.Rect {

@@ -64,7 +64,8 @@ private_fallback_stays_inside_the_given_files :: proc(t: ^testing.T) {
 	}
 }
 
-// Twemoji is COLR version 0, which DirectWrite's colour translation draws in colour.
+// Twemoji is COLR version 0, which DirectWrite's colour translation draws in colour. Every layer
+// names a palette colour, so none follows the foreground.
 @(test)
 private_emoji_rasterizes_in_colour :: proc(t: ^testing.T) {
 	s, err := font.system_create_private(test_fonts.files())
@@ -74,8 +75,9 @@ private_emoji_rasterizes_in_colour :: proc(t: ^testing.T) {
 	if !testing.expect_value(t, emoji_err, font.Error.None) {return}
 	glyph, found := font.glyph_lookup(s, emoji, .Regular, 0x1f600)
 	if !testing.expect(t, found) {return}
-	bitmap, raster_err := font.glyph_rasterize(s, glyph, 32, context.allocator, color = true)
+	bitmap, raster_err := font.glyph_rasterize(s, glyph, 32, context.allocator, [3]f32{0.2, 0.4, 0.6})
 	defer font.bitmap_destroy(&bitmap, context.allocator)
 	testing.expect_value(t, raster_err, font.Error.None)
 	testing.expect(t, bitmap.color && len(bitmap.pixels) > 0)
+	testing.expect(t, !bitmap.foreground, "a palette layer was drawn in the foreground")
 }

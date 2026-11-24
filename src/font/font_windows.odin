@@ -577,15 +577,16 @@ glyph_advance :: proc(s: ^System, glyph: Glyph, size_px: f32) -> f32 {
 	return glyph.advance_em * size_px
 }
 
-// Rasterizes one glyph. With color set, a glyph the font defines in color (COLR layers, as in
-// Segoe UI Emoji) comes back as premultiplied RGBA; any other glyph comes back as coverage.
+// Rasterizes one glyph. Given a foreground (the text's RGB), a glyph the font defines in color (COLR
+// layers, as in Segoe UI Emoji) comes back as premultiplied RGBA, its text-colored layers in that
+// foreground; any other glyph comes back as coverage.
 @(require_results)
 glyph_rasterize :: proc(
 	s: ^System,
 	glyph: Glyph,
 	size_px: f32,
 	allocator: runtime.Allocator,
-	color := false,
+	foreground: Maybe([3]f32) = nil,
 ) -> (
 	Bitmap,
 	Error,
@@ -605,8 +606,8 @@ glyph_rasterize :: proc(
 		glyphCount   = 1,
 		glyphIndices = &index,
 	}
-	if color {
-		bitmap, found, err := rasterize_color(s, &run, allocator)
+	if ink, color := foreground.?; color {
+		bitmap, found, err := rasterize_color(s, &run, ink, allocator)
 		if found || err != .None {
 			return bitmap, err
 		}
@@ -616,12 +617,11 @@ glyph_rasterize :: proc(
 		return {}, err
 	}
 	return {
-			coverage,
-			bounds.right - bounds.left,
-			bounds.bottom - bounds.top,
-			bounds.left,
-			-bounds.top,
-			false,
+			pixels = coverage,
+			width = bounds.right - bounds.left,
+			height = bounds.bottom - bounds.top,
+			left = bounds.left,
+			top = -bounds.top,
 		},
 		.None
 }
@@ -684,11 +684,12 @@ rasterize_coverage :: proc(
 }
 
 // Composites a color glyph's layers into premultiplied RGBA. Reports found false for a glyph
-// without color layers. Layers that use the text color are drawn white.
+// without color layers.
 @(private, require_results)
 rasterize_color :: proc(
 	s: ^System,
 	run: ^dw.Glyph_Run,
+	foreground: [3]f32,
 	allocator: runtime.Allocator,
 ) -> (
 	Bitmap,
@@ -704,17 +705,11 @@ rasterize_color :: proc(
 		return {}, false, .DirectWrite
 	}
 	defer release(layers)
-	Layer :: struct {
-		coverage: []u8,
-		bounds:   windows.RECT,
-		color:    [4]f32,
-	}
-	collected := make([dynamic]Layer, allocator)
+	collected := make([dynamic]Color_Layer, allocator)
 	defer {
 		for layer in collected {delete(layer.coverage, allocator)}
 		delete(collected)
 	}
-	union_bounds := windows.RECT{max(i32), max(i32), min(i32), min(i32)}
 	for {
 		has_run: windows.BOOL
 		if !checked(layers->MoveNext(&has_run), "ColorGlyphRunEnumerator.MoveNext") {
@@ -735,56 +730,22 @@ rasterize_color :: proc(
 		if err != .None {return {}, true, err}
 		if coverage == nil {continue}
 		c := current.runColor
-		layer_color :=
-			current.paletteIndex == 0xffff ? [4]f32{1, 1, 1, 1} : [4]f32{c.r, c.g, c.b, c.a}
-		if _, append_err := append(&collected, Layer{coverage, bounds, layer_color});
-		   append_err != nil {
+		layer := Color_Layer {
+			coverage   = coverage,
+			left       = bounds.left,
+			top        = bounds.top,
+			right      = bounds.right,
+			bottom     = bounds.bottom,
+			color      = {c.r, c.g, c.b, c.a},
+			foreground = current.paletteIndex == 0xffff,
+		}
+		if _, append_err := append(&collected, layer); append_err != nil {
 			delete(coverage, allocator)
 			return {}, true, .Out_Of_Memory
 		}
-		union_bounds.left = min(union_bounds.left, bounds.left)
-		union_bounds.top = min(union_bounds.top, bounds.top)
-		union_bounds.right = max(union_bounds.right, bounds.right)
-		union_bounds.bottom = max(union_bounds.bottom, bounds.bottom)
 	}
-	if len(collected) == 0 {
-		return {}, true, .None
-	}
-	width := i64(union_bounds.right) - i64(union_bounds.left)
-	height := i64(union_bounds.bottom) - i64(union_bounds.top)
-	if width > i64(max(i32)) || height > i64(max(i32)) || width * height > i64(max(u32)) / 4 {
-		return {}, true, .Invalid_Argument
-	}
-	pixels, alloc_err := make([]u8, int(width * height * 4), allocator)
-	if alloc_err != nil || pixels == nil {
-		return {}, true, .Out_Of_Memory
-	}
-	// Source-over in premultiplied space, bottom layer first, accumulated in floating point.
-	accumulated := make([][4]f32, int(width * height), allocator)
-	if accumulated == nil {
-		delete(pixels, allocator)
-		return {}, true, .Out_Of_Memory
-	}
-	defer delete(accumulated, allocator)
-	for layer in collected {
-		w := int(layer.bounds.right - layer.bounds.left)
-		dx := int(layer.bounds.left - union_bounds.left)
-		dy := int(layer.bounds.top - union_bounds.top)
-		for value, i in layer.coverage {
-			if value == 0 {continue}
-			a := f32(value) / 255 * layer.color.a
-			p := &accumulated[(dy + i / w) * int(width) + dx + i % w]
-			p^ = {layer.color.r * a, layer.color.g * a, layer.color.b * a, a} + p^ * (1 - a)
-		}
-	}
-	for p, i in accumulated {
-		for channel in 0 ..< 4 {
-			pixels[i * 4 + channel] = u8(math.round(clamp(p[channel], 0, 1) * 255))
-		}
-	}
-	return {pixels, i32(width), i32(height), union_bounds.left, -union_bounds.top, true},
-		true,
-		.None
+	bitmap, err := color_layers_composite(collected[:], foreground, allocator)
+	return bitmap, true, err
 }
 
 // The system's grayscale text gamma, in the form the renderer takes it.
