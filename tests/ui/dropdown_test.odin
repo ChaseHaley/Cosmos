@@ -194,6 +194,58 @@ dropdown_faded_choices_draw_faded_and_stay_pickable :: proc(t: ^testing.T) {
 }
 
 @(test)
+dropdown_marks_choices_past_the_thirty_second :: proc(t: ^testing.T) {
+	device, device_error := render.device_create(.Warp)
+	if !testing.expect_value(t, device_error, render.Error.None) {return}
+	defer render.device_destroy(device)
+	fonts, err := font.system_create()
+	if !testing.expect_value(t, err, font.Error.None) {return}
+	defer font.system_destroy(fonts)
+	cache: glyphs.Cache
+	glyphs.init(&cache, fonts, device)
+	defer glyphs.destroy(&cache)
+	text: ui.Text
+	if !testing.expect(t, ui.text_init(&text, fonts, &cache, 13)) {return}
+
+	MARKED :: 35
+	choices: [40]string
+	for &choice in choices {choice = "choice"}
+	marked: [len(choices)]bool
+	marked[MARKED] = true
+	c := ui.Dropdown_Choices {
+		choices  = choices[:],
+		multiple = true,
+		marked   = marked[:],
+	}
+	d: ui.Dropdown
+	ui.dropdown_init(&d)
+	defer ui.dropdown_destroy(&d)
+	ui.dropdown_open(&d, c)
+	testing.expect(t, ui.dropdown_wheel(&d, c, ANCHOR, -32, 1))
+	testing.expect_value(t, d.list.scroll, 32)
+
+	theme: ui.Theme
+	theme.text = {1, 1, 1, 1}
+	theme.accent = {0, 1, 0, 1}
+	list := render.draw_list_init()
+	defer render.draw_list_destroy(&list)
+	testing.expect_value(
+		t, ui.dropdown_draw(&d, c, ANCHOR, &list, &text, theme, {-1, -1}, 1), render.Build_Status.Ok,
+	)
+
+	// The check's strokes all fall on the marked choice's row, so no other row shows a mark.
+	popup := ui.dropdown_rect(&d, c, ANCHOR, 1)
+	top := popup.y + ui.dropdown_header(c, 1) + ui.OVERLAY_PADDING + f32(MARKED - 32) * ui.CHOICE_HEIGHT
+	strokes := 0
+	for r in list.rects {
+		if r.fill != render.RECT_FILL_SEGMENT || r.color != theme.accent {continue}
+		strokes += 1
+		testing.expect(t, r.rect.y >= top && r.rect.y + r.rect.height <= top + ui.CHOICE_HEIGHT)
+	}
+	testing.expect(t, strokes > 0)
+}
+
+@(test)
 dropdown_search_text_is_matched_in_place_of_decorated_labels :: proc(t: ^testing.T) {
 	files := FILES
 	labels := [len(FILES)]string {

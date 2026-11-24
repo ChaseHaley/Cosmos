@@ -56,8 +56,9 @@ Dropdown_Drag :: union {
 Dropdown_Search_Drag :: struct {}
 
 // The choices a dropdown shows, borrowed for the call. `labels`, when present, is what each choice
-// displays; `value` is the saved choice the list marks. A multiple choice marks the options `mask`
-// has on instead. `font_filter` adds the Show all fonts switch, on when `show_all_fonts`.
+// displays; `value` is the saved choice the list marks. A multiple choice marks the options `marked`
+// has on instead; `marked` is parallel to `choices` when present, and a choice past its end is
+// unmarked. `font_filter` adds the Show all fonts switch, on when `show_all_fonts`.
 // `min_width` is in DIPs; zero follows the field. `regex_toggle` puts the `.*` toggle in a searchable
 // list's search field. `faded`, parallel to `choices` when present, draws those choices faded; they
 // stay pickable. `search_text`, parallel to `choices` when present, is what the search matches in place
@@ -65,7 +66,7 @@ Dropdown_Search_Drag :: struct {}
 Dropdown_Choices :: struct {
 	choices, labels:                          []string,
 	value:                                    string,
-	mask:                                     u32,
+	marked:                                   []bool,
 	multiple, searchable:                     bool,
 	font_filter, show_all_fonts:              bool,
 	regex_toggle:                             bool,
@@ -667,7 +668,7 @@ dropdown_draw :: proc(
 			   result != .None {return .Ok}
 		}
 		if c.multiple {
-			if choice_set_has(c.mask, source) {
+			if source < len(c.marked) && c.marked[source] {
 				check := render.Rect{option.x + option.width - 28 * s, option.y, 24 * s, option.height}
 				icon_draw(list, .Check, check, theme.accent, ICON_INDICATOR, s)
 			}
@@ -704,11 +705,6 @@ dropdown_draw :: proc(
 		scrollbar_draw(list, theme, bar, scrollbar_state(d.bar_hover, d.drag.(Scroll_Drag) or_else Scroll_Drag{}))
 	}
 	return .Ok
-}
-
-// Whether a multi-select mask holds the choice at `index`.
-choice_set_has :: proc(mask: u32, index: int) -> bool {
-	return mask & (1 << u32(index)) != 0
 }
 
 // Indexes of the choices whose label, or value when unlabelled, contains `query` ignoring case.
