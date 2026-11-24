@@ -111,16 +111,27 @@ when !HEADLESS {
 			if !ok {return .Os}
 			ids[i] = item.id
 		}
-		if p.menu != nil && !os_ok(w.DestroyMenu(p.menu), "DestroyMenu") {return .Os}
-		delete(p.menu_ids, p.allocator)
+		if p.tray_menu_open && p.replaced_menu == nil {
+			// TrackPopupMenu is showing the old menu, so it and its ids live until the popup returns.
+			p.replaced_menu, p.replaced_menu_ids = p.menu, p.menu_ids
+		} else {
+			if p.menu != nil && !os_ok(w.DestroyMenu(p.menu), "DestroyMenu") {return .Os}
+			delete(p.menu_ids, p.allocator)
+		}
 		p.menu, p.menu_ids = menu, ids
 		success = true
 		return .None
 	}
 
+	// The host window's timer that runs the app's tick while the tray menu is open.
+	@(private)
+	TRAY_MENU_TIMER_ID :: 2
+
 	@(private)
 	tray_popup :: proc(p: ^Platform) {
-		if p.menu == nil {return}
+		// A tray click the tick dispatches while the menu is open must not open a second menu. Inside the
+		// tick of another modal loop the menu could not tick, so the app would stop until it closed.
+		if p.menu == nil || p.tray_menu_open || p.modal_ticking {return}
 		point: w.POINT
 		if !os_ok(w.GetCursorPos(&point), "GetCursorPos") {
 			p.error = .Os
@@ -130,6 +141,14 @@ when !HEADLESS {
 			p.error = .Os
 			return
 		}
+		// TrackPopupMenu runs its own message loop until the menu closes, so a timer runs the app's tick
+		// meanwhile, as frame dragging does.
+		timer := w.SetTimer(p.host.hwnd, TRAY_MENU_TIMER_ID, 16, nil) != 0
+		if !timer {
+			log.errorf("SetTimer(tray) failed: %d", w.GetLastError())
+			p.error = .Os
+		}
+		p.tray_menu_open = true
 		w.SetLastError(0)
 		flags := u32(w.TPM_RETURNCMD | w.TPM_NONOTIFY | w.TPM_RIGHTBUTTON)
 		command := w.TrackPopupMenu(p.menu, flags, point.x, point.y, 0, p.host.hwnd, nil)
@@ -137,8 +156,18 @@ when !HEADLESS {
 			log.errorf("TrackPopupMenu failed: %d", w.GetLastError())
 			p.error = .Os
 		}
-		if command > 0 && int(command) <= len(p.menu_ids) {
-			enqueue(p, Tray_Menu_Event{p.menu_ids[command - 1]})
+		p.tray_menu_open = false
+		if timer {record_os(p, w.KillTimer(p.host.hwnd, TRAY_MENU_TIMER_ID), "KillTimer(tray)")}
+		// The command indexes the menu that was shown, which the tick may have replaced.
+		ids := p.menu_ids
+		if p.replaced_menu != nil {ids = p.replaced_menu_ids}
+		if command > 0 && int(command) <= len(ids) {
+			enqueue(p, Tray_Menu_Event{ids[command - 1]})
+		}
+		if p.replaced_menu != nil {
+			record_os(p, w.DestroyMenu(p.replaced_menu), "DestroyMenu(replaced)")
+			delete(p.replaced_menu_ids, p.allocator)
+			p.replaced_menu, p.replaced_menu_ids = nil, nil
 		}
 		// A benign posted message lets the menu dismiss correctly on a second invocation.
 		record_os(p, w.PostMessageW(p.host.hwnd, w.WM_NULL, 0, 0), "PostMessageW(tray)")

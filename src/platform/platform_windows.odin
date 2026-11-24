@@ -33,15 +33,6 @@ when !HEADLESS {
 		text:      []u8,
 		text_used: int,
 	}
-	// While the user drags a window's edge or caption, Windows runs its own message loop inside
-	// DispatchMessageW, and the app's loop runs only when the window procedure calls back into it.
-	@(private)
-	Size_Move :: enum u8 {
-		None,
-		Looping,
-		// The app's tick is running. A message it causes must not start a second tick inside it.
-		Ticking,
-	}
 	// Full screen keeps what leaving it restores; a window without it is windowed.
 	@(private)
 	Screen_Full :: struct {
@@ -55,7 +46,9 @@ when !HEADLESS {
 		hwnd:                             w.HWND,
 		cursor:                           w.HCURSOR,
 		tracking:                         bool,
-		size_move:                        Size_Move,
+		// While the user drags the window's edge or caption, Windows runs its own message loop inside
+		// DispatchMessageW, and the app's loop runs only when the window procedure calls back into it.
+		size_moving:                      bool,
 		buttons:                          u8,
 		high_surrogate:                   u16,
 		previous_move:                    input.Mouse_Move_Event,
@@ -90,6 +83,14 @@ when !HEADLESS {
 		menu_ids:                   []u32,
 		modal_callback:             proc(user: rawptr),
 		modal_user:                 rawptr,
+		// The app's tick is running from a modal loop. A modal loop the tick itself enters, a frame drag
+		// or the tray menu, must not tick inside it, as the tick would then run nested in itself.
+		modal_ticking:              bool,
+		// TrackPopupMenu is showing the tray menu, inside its own message loop.
+		tray_menu_open:             bool,
+		// The menu the open popup shows, after tray_set_menu replaced it. It lives until the popup returns.
+		replaced_menu:              w.HMENU,
+		replaced_menu_ids:          []u32,
 		frequency:                  w.LARGE_INTEGER,
 		taskbar:                    Service(^w.ITaskbarList3),
 		com_initialized:            bool,
@@ -432,8 +433,9 @@ when !HEADLESS {
 		if sync.atomic_exchange(&p.wake_pending, 0) != 0 {
 			enqueue(p, Wake_Event{})
 		}
-		// A modal size/move loop inside DispatchMessageW runs the app's tick, which polls and swaps the
-		// queues, so the queue being filled is looked up afresh rather than held across a dispatch.
+		// A modal loop inside DispatchMessageW, a frame drag or the tray menu, runs the app's tick, which
+		// polls and swaps the queues, so the queue being filled is looked up afresh rather than held across
+		// a dispatch.
 		message: w.MSG
 		for queue_has_room(&p.queues[p.write_queue]) && bool(w.PeekMessageW(&message, nil, 0, 0, w.PM_REMOVE)) {
 			owned := message.hwnd == p.host.hwnd
@@ -1174,19 +1176,22 @@ when !HEADLESS {
 		return .None
 	}
 
+	// The callback runs the app's tick from inside the system's modal loops, which otherwise block the app's
+	// own loop: while the user drags a window's frame and while the tray menu is open.
 	set_modal_loop_callback :: proc(p: ^Platform, callback: proc(user: rawptr), user: rawptr) {
 		p.modal_callback, p.modal_user = callback, user
 	}
 
-	// Runs the app's loop from inside the modal loop. The tick may close the window, so the window is
-	// looked up again afterwards, and it may end the loop, which must not be undone.
+	// Runs the app's loop from inside a modal loop, never inside itself. The modal loop's caller may read
+	// GetLastError when the loop returns, as tray_popup does, so the tick leaves it as it found it.
 	@(private)
-	size_move_tick :: proc(p: ^Platform, window: ^Window) {
-		if window.size_move != .Looping || p.modal_callback == nil {return}
-		id := window.id
-		window.size_move = .Ticking
+	modal_tick :: proc(p: ^Platform) {
+		if p.modal_ticking || p.modal_callback == nil {return}
+		last_error := w.GetLastError()
+		p.modal_ticking = true
 		p.modal_callback(p.modal_user)
-		if still := find_window(p, id); still != nil && still.size_move == .Ticking {still.size_move = .Looping}
+		p.modal_ticking = false
+		w.SetLastError(last_error)
 	}
 
 	@(private)
@@ -1385,7 +1390,7 @@ when !HEADLESS {
 					},
 				)
 			}
-			size_move_tick(p, window)
+			if window.size_moving {modal_tick(p)}
 			return 0
 		case w.WM_SETTINGCHANGE:
 			enqueue(p, Settings_Event{})
@@ -1401,18 +1406,23 @@ when !HEADLESS {
 			enqueue(p, Dpi_Event{window.id, u32(wp & 0xffff)})
 			return 0
 		case w.WM_ENTERSIZEMOVE:
-			window.size_move = .Looping
+			window.size_moving = true
 			if w.SetTimer(hwnd, SIZING_TIMER_ID, 16, nil) == 0 {
 				log.errorf("SetTimer failed: %d", w.GetLastError())
 				p.error = .Os
 			}
 			return 0
 		case w.WM_EXITSIZEMOVE:
-			window.size_move = .None
+			window.size_moving = false
 			record_os(p, w.KillTimer(hwnd, SIZING_TIMER_ID), "KillTimer")
 			return 0
 		case w.WM_TIMER:
-			if wp == SIZING_TIMER_ID {size_move_tick(p, window)}
+			switch wp {
+			case SIZING_TIMER_ID:
+				if window.size_moving {modal_tick(p)}
+			case TRAY_MENU_TIMER_ID:
+				if p.tray_menu_open {modal_tick(p)}
+			}
 			return 0
 		case w.WM_SETCURSOR:
 			if uintptr(lp) & 0xffff == w.HTCLIENT {
@@ -1463,7 +1473,7 @@ when !HEADLESS {
 	// The user is moving or sizing the window by its frame, inside the system's modal loop.
 	window_sizing :: proc(p: ^Platform, id: input.Window_Id) -> bool {
 		window := find_window(p, id)
-		return window != nil && window.size_move != .None
+		return window != nil && window.size_moving
 	}
 
 	// window_set_screen covers the monitor with no caption or frame, and restores the prior placement.

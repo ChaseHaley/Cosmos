@@ -460,6 +460,47 @@ modal_loop_tick_does_not_nest_and_may_end_the_loop :: proc(t: ^testing.T) {
 	_, _ = p.poll_events(&platform)
 }
 
+Modal_Pair :: struct {
+	first, second:         w.HWND,
+	calls, depth, deepest: int,
+}
+
+// A modal loop the tick enters, here a drag of another window, must not run the tick inside itself.
+@(test)
+modal_loop_entered_by_the_tick_does_not_nest_it :: proc(t: ^testing.T) {
+	platform: p.Platform
+	if !testing.expect_value(t, p.init(&platform, "AIODev.Test.ModalPair"), p.Init_Result.Primary) { return }
+	defer testing.expect_value(t, p.destroy(&platform), p.Error.None)
+	first, first_error := p.window_create(&platform, {hidden = true, width = 160, height = 100})
+	if !testing.expect_value(t, first_error, p.Error.None) { return }
+	second, second_error := p.window_create(&platform, {hidden = true, width = 160, height = 100})
+	if !testing.expect_value(t, second_error, p.Error.None) { return }
+	state := Modal_Pair {
+		first  = w.HWND(p.window_native_handle(&platform, first)),
+		second = w.HWND(p.window_native_handle(&platform, second)),
+	}
+	p.set_modal_loop_callback(&platform, proc(user: rawptr) {
+		state := (^Modal_Pair)(user)
+		state.calls += 1
+		state.depth += 1
+		state.deepest = max(state.deepest, state.depth)
+		if state.calls == 1 {
+			w.SendMessageW(state.second, w.WM_ENTERSIZEMOVE, 0, 0)
+			w.SendMessageW(state.second, w.WM_TIMER, 1, 0)
+			w.SendMessageW(state.second, w.WM_SIZE, 0, w.LPARAM(20 | (20 << 16)))
+			w.SendMessageW(state.second, w.WM_EXITSIZEMOVE, 0, 0)
+		}
+		state.depth -= 1
+	}, &state)
+	defer p.set_modal_loop_callback(&platform, nil, nil)
+	w.SendMessageW(state.first, w.WM_ENTERSIZEMOVE, 0, 0)
+	w.SendMessageW(state.first, w.WM_TIMER, 1, 0)
+	w.SendMessageW(state.first, w.WM_EXITSIZEMOVE, 0, 0)
+	testing.expect_value(t, state.calls, 1)
+	testing.expect_value(t, state.deepest, 1)
+	_, _ = p.poll_events(&platform)
+}
+
 @(test)
 tray_menu_validation :: proc(t: ^testing.T) {
 	platform: p.Platform
