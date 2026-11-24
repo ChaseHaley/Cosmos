@@ -41,9 +41,12 @@ confirmation_asking :: proc(q: ^Maybe($Q), $T: typeid) -> ^T {
 	return confirmation_subject(q, T)
 }
 
-// Asks about `subject`, presenting it as stated. The owner has released any question shown before.
+// Asks about `subject`, presenting it as stated, as a scope of the window's Focus with the dialog's focus
+// ids from `id` (see confirm_open). The owner has released any question shown before.
 confirmation_ask :: proc(
 	q: ^Maybe($Q),
+	f: ^Focus,
+	id: Focus_Id,
 	subject: $S,
 	extended := false,
 	focus := Confirm_Button.Accept,
@@ -51,16 +54,16 @@ confirmation_ask :: proc(
 ) where intrinsics.type_is_specialization_of(Q, Confirmation) {
 	c: Q
 	c.subject = subject
-	confirm_open(&c.dialog, extended, focus, show_option)
+	confirm_open(&c.dialog, f, id, extended, focus, show_option)
 	q^ = c
 }
 
-// Answers the asking question: the dialog starts closing with its subject intact, and this returns the
-// question for the owner to act on its subject. nil when nothing is asking.
-confirmation_answer :: proc(q: ^Maybe($Q)) -> ^Q {
+// Answers the asking question: the dialog starts closing with its subject intact and gives focus back,
+// and this returns the question for the owner to act on its subject. nil when nothing is asking.
+confirmation_answer :: proc(q: ^Maybe($Q), f: ^Focus) -> ^Q {
 	if confirmation_current(q) == nil {return nil}
 	c := confirmation_shown(q)
-	confirm_close(&c.dialog)
+	confirm_close(&c.dialog, f)
 	return c
 }
 
