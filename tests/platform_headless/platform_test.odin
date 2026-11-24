@@ -112,6 +112,49 @@ moving_between_displays_reports_dpi :: proc(t: ^testing.T) {
 	testing.expect_value(t, err, platform.Error.Invalid_Window)
 }
 
+// A change of the system's appearance arrives as one event carrying it; setting the same appearance again
+// reports nothing.
+@(test)
+appearance_changes_arrive_once :: proc(t: ^testing.T) {
+	p: platform.Platform
+	if !platform_open(t, &p, "Appearance") {return}
+	defer _ = platform.destroy(&p)
+	_ = open_window(t, &p, 200, 100)
+	_ = open_window(t, &p, 200, 100)
+	testing.expect(t, platform.system_appearance(&p).dark, "the headless system is not dark")
+	_ = drain(&p)
+	light := platform.Appearance {
+		high_contrast = true,
+		accent        = [3]u8{0, 120, 212},
+	}
+	platform.set_system_appearance(&p, light)
+	testing.expect_value(t, platform.system_appearance(&p), light)
+	got := drain(&p)
+	if testing.expect_value(t, len(got), 1) {
+		testing.expect_value(t, got[0], platform.Event(platform.Appearance_Event{light}))
+	}
+	platform.set_system_appearance(&p, light)
+	testing.expect_value(t, len(drain(&p)), 0)
+}
+
+// A window opens with the frame its description asks for, and window_set_dark changes it.
+@(test)
+window_frames_are_dark_or_light_per_window :: proc(t: ^testing.T) {
+	p: platform.Platform
+	if !platform_open(t, &p, "DarkFrame") {return}
+	defer _ = platform.destroy(&p)
+	dark, err := platform.window_create(&p, {width = 200, height = 100, inactive = true, dark = true})
+	testing.expect_value(t, err, platform.Error.None)
+	light := open_window(t, &p, 200, 100)
+	testing.expect(t, platform.window_dark(&p, dark), "the window asked for dark opened light")
+	testing.expect(t, !platform.window_dark(&p, light), "the default window opened dark")
+	testing.expect_value(t, platform.window_set_dark(&p, dark, false), platform.Error.None)
+	testing.expect_value(t, platform.window_set_dark(&p, light, true), platform.Error.None)
+	testing.expect(t, !platform.window_dark(&p, dark) && platform.window_dark(&p, light))
+	missing := platform.window_set_dark(&p, input.Window_Id(9999), true)
+	testing.expect_value(t, missing, platform.Error.Invalid_Window)
+}
+
 // The in-memory clipboard round-trips text with CRLF line breaks, as the Windows one stores them,
 // and never touches the real clipboard.
 @(test)

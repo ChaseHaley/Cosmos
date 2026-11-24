@@ -96,6 +96,8 @@ when !HEADLESS {
 		com_initialized:            bool,
 		// OleInitialize succeeded on this thread, so drop targets can register and one OleUninitialize is owed.
 		ole:                        bool,
+		// The appearance as last read; WM_SETTINGCHANGE compares a new reading with it.
+		appearance:                 Appearance,
 	}
 
 	// A service the platform starts on first use. Its failure is kept, so a broken service is neither
@@ -278,6 +280,7 @@ when !HEADLESS {
 		} else {
 			log.errorf("OleInitialize failed: HRESULT 0x%x", u32(hr))
 		}
+		p.appearance = appearance_read()
 		success = true
 		return .Primary
 	}
@@ -679,20 +682,10 @@ when !HEADLESS {
 				"SetWindowPos(title bar)",
 			)
 		}
-		dark := w.BOOL(true)
-		hr := w.DwmSetWindowAttribute(
-			window.hwnd,
-			u32(w.DWMWINDOWATTRIBUTE.DWMWA_USE_IMMERSIVE_DARK_MODE),
-			&dark,
-			size_of(dark),
-		)
-		if hr < 0 {
-			log.errorf("DwmSetWindowAttribute(dark) failed: HRESULT %x", u32(hr))
-			cleanup_error := window_destroy(p, window.id)
-			if cleanup_error != .None {
-				p.error = cleanup_error
+		if desc.dark {
+			if hr := frame_dark_set(window.hwnd, true); hr < 0 {
+				log.warnf("DwmSetWindowAttribute(dark) failed: HRESULT %x; the frame stays light", u32(hr))
 			}
-			return 0, .Os
 		}
 		width, height, size_error := window_client_size(p, window.id)
 		if size_error != .None {
@@ -1394,6 +1387,8 @@ when !HEADLESS {
 			return 0
 		case w.WM_SETTINGCHANGE:
 			enqueue(p, Settings_Event{})
+			// Every top-level window hears the broadcast; only the host checks it, so a change is one event.
+			if hwnd == p.host.hwnd && appearance_setting(wp, lp) {appearance_refresh(p)}
 			return w.DefWindowProcW(hwnd, message, wp, lp)
 		case w.WM_DPICHANGED:
 			r := (^w.RECT)(uintptr(lp))

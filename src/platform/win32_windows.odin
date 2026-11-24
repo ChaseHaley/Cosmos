@@ -30,6 +30,14 @@ FLASHWINFO :: struct {
 	dwTimeout: w.DWORD,
 }
 
+HCF_HIGHCONTRASTON :: 0x00000001
+
+HIGHCONTRASTW :: struct {
+	cbSize:            w.UINT,
+	dwFlags:           w.DWORD,
+	lpszDefaultScheme: w.LPWSTR,
+}
+
 HKL :: distinct rawptr
 
 DWM_TNP_RECTDESTINATION :: 0x01

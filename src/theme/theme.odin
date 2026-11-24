@@ -4,10 +4,11 @@ import "cosmos:colour"
 import "core:fmt"
 import "core:strings"
 
-// The fallback theme, compiled in so a missing or emptied themes folder still has one. It is also the
-// root every theme's missing colors come from.
+// The fallback themes for a dark and a light system, compiled in so a missing or emptied themes folder
+// still has them. The dark one is also the root every theme's missing colors come from.
 DEFAULT_ID :: "studio-dark"
 DEFAULT_TEXT :: #load("../../themes/studio-dark.theme.json", string)
+DEFAULT_LIGHT_TEXT :: #load("../../themes/studio-light.theme.json", string)
 // How many themes deep a chain of bases may go; the bound also ends a cycle of bases.
 BASE_DEPTH :: 8
 
@@ -717,10 +718,11 @@ file_optional :: proc(token: Token) -> bool {
 	return DEFAULT_LINKS[token] != nil || tokens[token].kind == .Clear
 }
 
-// The compiled-in theme, complete in every color: the file's own colors are concrete, and the colors it
-// leaves out follow their default links, resolved here, as they do in every other theme.
-default :: proc() -> Theme {
-	file, issue := file_parse(DEFAULT_TEXT)
+// The compiled-in theme for a dark or light system, complete in every color: the file's own colors are
+// concrete, and the colors it leaves out follow their default links, resolved here, as they do in every
+// other theme.
+default :: proc(dark := true) -> Theme {
+	file, issue := file_parse(dark ? DEFAULT_TEXT : DEFAULT_LIGHT_TEXT)
 	complete := issue == "" && file.linked == {}
 	for token in Token {complete &&= token in file.overrides || file_optional(token)}
 	assert(complete, "invalid default theme")
