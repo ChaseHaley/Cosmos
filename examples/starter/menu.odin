@@ -42,7 +42,7 @@ menu_destroy :: proc(m: ^Context_Menu) {
 menu_open :: proc(s: ^Starter, point: [2]f32) {
 	m := &s.menu
 	ui.menu_clear(&m.menu)
-	add :: proc(m: ^ui.Menu, item: ui.Menu_Item) {_, _ = ui.menu_add(m, item)}
+	add :: proc(m: ^ui.Menu, item: ui.Menu_Item) {_ = ui.menu_add(m, item)}
 	add(&m.menu, {label = "Open videos…", shortcut = "Ctrl+O", enabled = true, payload = u32(Menu_Action.Open)})
 	add(&m.menu, {label = "Export clip…", shortcut = "Ctrl+S", enabled = true, payload = u32(Menu_Action.Export)})
 	add(&m.menu, {separator = true})
@@ -68,7 +68,7 @@ speed_open :: proc(s: ^Starter, row: int, select_first: bool) {
 	speeds := SPEEDS
 	for speed, i in speeds {
 		label := fmt.tprintf("%g×", speed)
-		_, _ = ui.menu_add(&sub.menu, {label = label, enabled = true, checked = speed == s.speed, payload = u32(i)})
+		_ = ui.menu_add(&sub.menu, {label = label, enabled = true, checked = speed == s.speed, payload = u32(i)})
 	}
 	ui.submenu_place(sub, &s.menu.menu, row, SPEED_MENU_WIDTH, select_first, f32(s.width), f32(s.height), s.scale)
 }

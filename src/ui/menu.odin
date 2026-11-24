@@ -8,8 +8,6 @@ MENU_WIDTH :: f32(280)
 MENU_ROW_HEIGHT :: HEIGHT_STANDARD
 // A hairline with SPACE_1 above and below.
 MENU_SEPARATOR_HEIGHT :: 2 * SPACE_1 + 1
-// Enough for the profiles and content choices in the longest New tab menu.
-MENU_MAX_ITEMS :: 72
 
 Menu_Item :: struct {
 	label, shortcut, icon: string,
@@ -75,12 +73,12 @@ menu_clear :: proc(m: ^Menu) {
 	m.scroll = 0
 }
 
-// Added is false when the menu already holds MENU_MAX_ITEMS rows; the error is the append's.
-menu_add :: proc(m: ^Menu, item: Menu_Item) -> (added: bool, error: runtime.Allocator_Error) {
-	if len(m.items) >= MENU_MAX_ITEMS {return false, nil}
-	if _, error = append(&m.items, item); error != nil {return false, error}
+// Selects the first row added; the error is the append's.
+@(require_results)
+menu_add :: proc(m: ^Menu, item: Menu_Item) -> runtime.Allocator_Error {
+	if _, error := append(&m.items, item); error != nil {return error}
 	if len(m.items) == 1 {menu_select(m, 0)}
-	return true, nil
+	return nil
 }
 
 // The row, or -1 for no selection at the row-index interface.

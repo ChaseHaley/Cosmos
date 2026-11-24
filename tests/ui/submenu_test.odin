@@ -17,16 +17,16 @@ SCALE :: f32(1)
 parent_build :: proc(m: ^ui.Menu) {
 	ui.menu_init(m)
 	ui.menu_anchor(m, 40, 40)
-	_, _ = ui.menu_add(m, {label = "plain", enabled = true})
-	_, _ = ui.menu_add(m, {label = "more", enabled = true, submenu = true})
-	_, _ = ui.menu_add(m, {label = "other", enabled = true, submenu = true})
+	_ = ui.menu_add(m, {label = "plain", enabled = true})
+	_ = ui.menu_add(m, {label = "more", enabled = true, submenu = true})
+	_ = ui.menu_add(m, {label = "other", enabled = true, submenu = true})
 }
 
 // What an owner's open does: builds the rows and places them beside row `row`.
 @(private = "file")
 submenu_build :: proc(sub: ^ui.Submenu, parent: ^ui.Menu, row: int, select_first: bool) {
 	ui.menu_init(&sub.menu)
-	for label in ([?]string{"first", "second", "third"}) {_, _ = ui.menu_add(&sub.menu, {label = label, enabled = true})}
+	for label in ([?]string{"first", "second", "third"}) {_ = ui.menu_add(&sub.menu, {label = label, enabled = true})}
 	ui.submenu_place(sub, parent, row, 200, select_first, WIDTH, HEIGHT, SCALE)
 }
 

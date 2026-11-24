@@ -12,9 +12,9 @@ menu_row_buttons_sit_inside_their_row_and_hide_with_selection :: proc(t: ^testin
 	ui.menu_init(&m)
 	defer ui.menu_destroy(&m)
 	ui.menu_anchor(&m, 40, 40)
-	_, _ = ui.menu_add(&m, {label = "first", enabled = true, action = ui.Icon.Workspace, selected_action = ui.Icon.Close})
-	_, _ = ui.menu_add(&m, {label = "second", enabled = true, action = ui.Icon.Workspace, selected_action = ui.Icon.Close})
-	_, _ = ui.menu_add(&m, {label = "plain", enabled = true})
+	_ = ui.menu_add(&m, {label = "first", enabled = true, action = ui.Icon.Workspace, selected_action = ui.Icon.Close})
+	_ = ui.menu_add(&m, {label = "second", enabled = true, action = ui.Icon.Workspace, selected_action = ui.Icon.Close})
+	_ = ui.menu_add(&m, {label = "plain", enabled = true})
 	width, height, scale := f32(800), f32(600), f32(1.5)
 	ui.menu_select(&m, 0)
 	center :: proc(r: [4]f32) -> (f32, f32) {return r[0] + r[2] / 2, r[1] + r[3] / 2}
@@ -52,7 +52,7 @@ menu_drawing_preserves_selection_and_scroll_and_hit_testing_matches :: proc(t: ^
 	m: ui.Menu
 	ui.menu_init(&m)
 	defer ui.menu_destroy(&m)
-	for _ in 0..<30 {_, _ = ui.menu_add(&m, {separator = true})}
+	for _ in 0..<30 {_ = ui.menu_add(&m, {separator = true})}
 	ui.menu_select(&m, 25)
 	list := render.draw_list_init()
 	defer render.draw_list_destroy(&list)
@@ -76,8 +76,8 @@ menu_edge_navigation_without_enabled_rows_preserves_selection :: proc(t: ^testin
 	m: ui.Menu
 	ui.menu_init(&m)
 	defer ui.menu_destroy(&m)
-	_, _ = ui.menu_add(&m, {label = "disabled"})
-	_, _ = ui.menu_add(&m, {separator = true})
+	_ = ui.menu_add(&m, {label = "disabled"})
+	_ = ui.menu_add(&m, {separator = true})
 	testing.expect_value(t, ui.menu_key(&m, {key = .End, pressed = true}), ui.Menu_Outcome.Changed)
 	testing.expect_value(t, ui.menu_selected(&m), 0)
 	testing.expect_value(t, ui.menu_key(&m, {key = .Home, pressed = true}), ui.Menu_Outcome.Changed)
@@ -87,18 +87,24 @@ menu_edge_navigation_without_enabled_rows_preserves_selection :: proc(t: ^testin
 }
 
 @(test)
-menu_add_reports_a_full_menu_apart_from_an_added_row :: proc(t: ^testing.T) {
+a_long_menu_reaches_and_shows_its_last_row :: proc(t: ^testing.T) {
 	m: ui.Menu
 	ui.menu_init(&m)
 	defer ui.menu_destroy(&m)
-	for i in 0 ..< ui.MENU_MAX_ITEMS {
-		added, err := ui.menu_add(&m, {label = "row", enabled = true, payload = u32(i)})
-		testing.expect(t, added && err == nil)
+	for i in 0 ..< 200 {
+		err := ui.menu_add(&m, {label = "row", enabled = true, payload = u32(i)})
+		if !testing.expect(t, err == nil) {return}
 	}
-	added, err := ui.menu_add(&m, {label = "extra", enabled = true})
-	testing.expect(t, !added && err == nil)
-	testing.expect_value(t, len(m.items), ui.MENU_MAX_ITEMS)
-	testing.expect_value(t, m.items[ui.MENU_MAX_ITEMS - 1].payload, u32(ui.MENU_MAX_ITEMS - 1))
+	width, height, scale := f32(400), f32(300), f32(1)
+	testing.expect_value(t, ui.menu_key(&m, {key = .End, pressed = true}), ui.Menu_Outcome.Changed)
+	testing.expect_value(t, ui.menu_selected(&m), 199)
+	ui.menu_reveal(&m, width, height, scale)
+	surface, rows := ui.menu_layout(&m, width, height, scale)
+	testing.expect_value(t, m.scroll + rows, 200)
+	last := ui.menu_row_rect(&m, 199, width, height, scale)
+	testing.expect(t, last.y >= surface.y && last.y + last.height <= surface.y + surface.height)
+	middle := last.y + last.height / 2
+	testing.expect_value(t, ui.menu_hit(&m, last.x + 1, middle, width, height, scale), 199)
 }
 
 @(test)
@@ -122,8 +128,8 @@ a_checked_menu_row_is_drawn_as_a_selected_vertical_tab :: proc(t: ^testing.T) {
 	m: ui.Menu
 	ui.menu_init(&m)
 	defer ui.menu_destroy(&m)
-	_, _ = ui.menu_add(&m, {label = "on", enabled = true, checked = true})
-	_, _ = ui.menu_add(&m, {label = "off", enabled = true})
+	_ = ui.menu_add(&m, {label = "on", enabled = true, checked = true})
+	_ = ui.menu_add(&m, {label = "off", enabled = true})
 	ui.menu_select(&m, -1)
 	list := render.draw_list_init()
 	defer render.draw_list_destroy(&list)
