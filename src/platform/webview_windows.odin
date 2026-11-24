@@ -81,7 +81,7 @@ when !HEADLESS {
 			visible, level: i32,
 			vis_x, vis_y, vis_w, vis_h: i32,
 			clip_l, clip_t, clip_r, clip_b: f32,
-			bounds_w, bounds_h: i32,
+			bounds_x, bounds_y, bounds_w, bounds_h: i32,
 			radius_bl, radius_br, raster_scale: f32,
 		) ---
 		cosmos_webview_set_color_scheme :: proc(view: rawptr, scheme: i32) ---
@@ -229,7 +229,9 @@ when !HEADLESS {
 	}
 
 	// Places the view's visual at DirectComposition `level`: 0 for tiled panes, above it one per floating
-	// group that shows a web pane, so later floats cover it.
+	// group that shows a web pane, so later floats cover it. `bounds_*` is the page's viewport in the host
+	// window's client pixels (ICoreWebView2Controller::put_Bounds): its origin is where the visual is
+	// drawn, so WebView2 opens dropdowns, tooltips and menus there; a zero size uses the visual's rect.
 	webview_set_placement :: proc(
 		view: Webview,
 		host: Webview_Host,
@@ -237,7 +239,7 @@ when !HEADLESS {
 		level: i32,
 		vis_x, vis_y, vis_w, vis_h: i32,
 		clip_l, clip_t, clip_r, clip_b: f32,
-		bounds_w, bounds_h: i32,
+		bounds_x, bounds_y, bounds_w, bounds_h: i32,
 		radius_bl, radius_br, raster_scale: f32,
 	) {
 		if view == nil {return}
@@ -254,6 +256,8 @@ when !HEADLESS {
 			clip_t,
 			clip_r,
 			clip_b,
+			bounds_x,
+			bounds_y,
 			bounds_w,
 			bounds_h,
 			radius_bl,
