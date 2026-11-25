@@ -326,8 +326,11 @@ struct Cosmos_Webview {
     int level = 0;
     int vis_x = 0, vis_y = 0, vis_w = 0, vis_h = 0;
     float clip_l = 0.0f, clip_t = 0.0f, clip_r = 0.0f, clip_b = 0.0f;
-    int bounds_w = 0, bounds_h = 0;
-    int applied_bounds_w = -1, applied_bounds_h = -1;
+    // The controller's Bounds in the host window's client pixels, where the visual is drawn; WebView2
+    // opens dropdowns, tooltips and menus relative to them.
+    RECT bounds{};
+    RECT applied_bounds{};
+    bool bounds_applied = false;
     float radius_bl = 0.0f, radius_br = 0.0f;
     float raster_scale = 1.0f;
     float applied_scale = 0.0f;
@@ -384,8 +387,7 @@ static void ensure_visual_for_host(Cosmos_Webview *v, Cosmos_Webview_Host *host)
         if (old_host && old_host->dcomp) old_host->dcomp->Commit();
         v->visual_host = host;
         // Force bounds and scale reapplication so Chromium commits a fresh frame to the new visual.
-        v->applied_bounds_w = -1;
-        v->applied_bounds_h = -1;
+        v->bounds_applied = false;
         v->applied_scale = 0.0f;
         if (v->controller) {
             v->controller->put_ParentWindow(host->hwnd);
@@ -451,13 +453,14 @@ static void apply_placement(Cosmos_Webview *v) {
         v->applied_scale = v->raster_scale;
     }
 
-    int bw = (v->bounds_w > 0) ? v->bounds_w : v->vis_w;
-    int bh = (v->bounds_h > 0) ? v->bounds_h : v->vis_h;
-    if (bw != v->applied_bounds_w || bh != v->applied_bounds_h) {
-        RECT bounds{0, 0, bw, bh};
+    RECT bounds = v->bounds;
+    if (bounds.right <= bounds.left || bounds.bottom <= bounds.top) {
+        bounds = RECT{v->vis_x, v->vis_y, v->vis_x + v->vis_w, v->vis_y + v->vis_h};
+    }
+    if (!v->bounds_applied || !EqualRect(&bounds, &v->applied_bounds)) {
         v->controller->put_Bounds(bounds);
-        v->applied_bounds_w = bw;
-        v->applied_bounds_h = bh;
+        v->applied_bounds = bounds;
+        v->bounds_applied = true;
     }
     v->controller->put_IsVisible(TRUE);
 }
@@ -1180,8 +1183,7 @@ void cosmos_webview_detach_host(void *raw, HWND fallback_hwnd) noexcept {
     v->visual_host = nullptr;
     v->host = nullptr;
     v->visible = false;
-    v->applied_bounds_w = -1;
-    v->applied_bounds_h = -1;
+    v->bounds_applied = false;
     v->applied_scale = 0.0f;
     if (v->controller) {
         v->controller->put_IsVisible(FALSE);
@@ -1194,8 +1196,8 @@ void cosmos_webview_detach_host(void *raw, HWND fallback_hwnd) noexcept {
 
 void cosmos_webview_set_placement(void *raw, void *raw_host, int visible, int level, int vis_x, int vis_y,
                                int vis_w, int vis_h, float clip_l, float clip_t, float clip_r, float clip_b,
-                               int bounds_w, int bounds_h, float radius_bl, float radius_br,
-                               float raster_scale) noexcept {
+                               int bounds_x, int bounds_y, int bounds_w, int bounds_h, float radius_bl,
+                               float radius_br, float raster_scale) noexcept {
     if (!raw) return;
     auto *v = static_cast<Cosmos_Webview *>(raw);
     auto *host = static_cast<Cosmos_Webview_Host *>(raw_host);
@@ -1211,8 +1213,7 @@ void cosmos_webview_set_placement(void *raw, void *raw_host, int visible, int le
     v->clip_t = clip_t;
     v->clip_r = clip_r;
     v->clip_b = clip_b;
-    v->bounds_w = bounds_w;
-    v->bounds_h = bounds_h;
+    v->bounds = RECT{bounds_x, bounds_y, bounds_x + bounds_w, bounds_y + bounds_h};
     v->radius_bl = radius_bl;
     v->radius_br = radius_br;
     v->raster_scale = raster_scale;
