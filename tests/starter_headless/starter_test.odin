@@ -14,12 +14,12 @@ import "cosmos:ui"
 import starter "../../examples/starter"
 
 // The headless platform and WARP: nothing opens on the desktop and the pixels are the same everywhere.
-@(private = "file")
+@(private)
 open :: proc(t: ^testing.T, s: ^starter.Starter) -> bool {
 	return testing.expect(t, starter.starter_init(s, .Warp), "the starter did not start")
 }
 
-@(private = "file")
+@(private)
 expect_color :: proc(t: ^testing.T, pixels: []u8, width: i32, x, y: f32, color: [4]f32, what: string) {
 	index := (int(y) * int(width) + int(x)) * 4
 	if !testing.expect(t, index + 4 <= len(pixels), what) {return}
@@ -32,19 +32,19 @@ expect_color :: proc(t: ^testing.T, pixels: []u8, width: i32, x, y: f32, color: 
 	}
 }
 
-@(private = "file")
+@(private)
 read_frame :: proc(t: ^testing.T, s: ^starter.Starter) -> ([]u8, bool) {
 	starter.starter_frame(s)
 	pixels, err := render.surface_read_pixels(s.device, s.surface.(^render.Surface), context.allocator)
 	return pixels, testing.expect_value(t, err, render.Error.None)
 }
 
-@(private = "file")
+@(private)
 key :: proc(s: ^starter.Starter, k: input.Key, modifiers: input.Modifiers = {}) {
 	starter.starter_event(s, input.Key_Event{window = s.window, key = k, modifiers = modifiers, pressed = true})
 }
 
-@(private = "file")
+@(private)
 press :: proc(s: ^starter.Starter, button: input.Mouse_Button, point: [2]f32) {
 	starter.starter_event(s, input.Mouse_Button_Event{window = s.window, button = button, pressed = true, x = i32(point.x), y = i32(point.y)})
 }
@@ -202,7 +202,7 @@ moving_to_a_display_of_another_dpi_rescales_the_starter :: proc(t: ^testing.T) {
 }
 
 // The node of the last committed tree named `name`, as a screen reader finds it.
-@(private = "file")
+@(private)
 find_node :: proc(nodes: []platform.Access_Node, name: string) -> (platform.Access_Node, bool) {
 	for node in nodes {
 		if node.name == name {return node, true}
@@ -212,7 +212,7 @@ find_node :: proc(nodes: []platform.Access_Node, name: string) -> (platform.Acce
 
 // The tree of the frame the starter drew last, after it took the events queued for it. The tick frees its
 // temporary memory as main's loop does, so anything the starter keeps there across ticks reads as freed.
-@(private = "file")
+@(private)
 access_tick :: proc(
 	t: ^testing.T,
 	s: ^starter.Starter,
@@ -297,7 +297,8 @@ screen_readers_read_and_work_the_context_menu :: proc(t: ^testing.T) {
 	if !ok {return}
 	testing.expect_value(t, s.speed, f32(2))
 	testing.expect(t, !s.menu.shown, "choosing a speed left the menu open")
-	testing.expect_value(t, len(nodes), 1)
+	settings, has_settings := find_node(nodes, "Settings")
+	testing.expect(t, has_settings && settings.role == .Button, "the Settings opener did not return")
 	testing.expect_value(t, focus, platform.Access_Id(0))
 
 	press(&s, .Right, {100, 100})

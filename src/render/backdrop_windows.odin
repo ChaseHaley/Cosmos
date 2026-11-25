@@ -71,18 +71,17 @@ backdrop_ensure :: proc(d: ^Device, format: dxgi.FORMAT, width, height: u32) -> 
 	return .None
 }
 
-// Blurs `target`, a width x height render target, inside `layer`'s clip. It leaves `target` bound with a
-// full viewport; the caller sets the scissor, shaders and constants of what it draws next.
+// Blurs `target` within the effective scissor and `layer`'s own mask. It leaves the target bound with
+// a full viewport; the caller sets the scissor, shaders and constants of what it draws next.
 @(private, require_results)
 backdrop_blur :: proc(
 	d: ^Device,
 	target: ^d3d.IRenderTargetView,
 	width, height: i32,
-	layer: Layer,
+	layer: ^Layer,
+	clip: d3d.RECT,
 	constants: Frame_Constants,
 ) -> Error {
-	clip := scissor(layer.clip, f32(width), f32(height))
-	if clip.right <= clip.left || clip.bottom <= clip.top {return .None}
 	sigma := min(layer.blur, BACKDROP_BLUR_MAX)
 	reach := i32(math.ceil(3 * sigma))
 	region := d3d.BOX {
@@ -151,6 +150,7 @@ backdrop_blur :: proc(
 		MaxDepth = 1,
 	}
 	c->RSSetViewports(1, &viewport)
+	clip := clip
 	c->RSSetScissorRects(1, &clip)
 	clip_width, clip_height := f32(clip.right - clip.left), f32(clip.bottom - clip.top)
 	k.target_size = {f32(width), f32(height)}

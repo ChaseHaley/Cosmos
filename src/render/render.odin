@@ -14,6 +14,13 @@ rect_contains :: proc(r: Rect, x, y: f32) -> bool {
 	return x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
 }
 
+// Intersection of two half-open rectangles. Disjoint or empty axes have zero extent.
+rect_intersect :: proc(a, b: Rect) -> Rect {
+	left, top := max(a.x, b.x), max(a.y, b.y)
+	right, bottom := min(a.x + a.width, b.x + b.width), min(a.y + a.height, b.y + b.height)
+	return {left, top, max(0, right - left), max(0, bottom - top)}
+}
+
 // The largest rect of `aspect` (width over height) centred in `container`, with whole-pixel edges, as a
 // video is letterboxed or pillarboxed in its viewer. An empty container or aspect gives an empty rect.
 rect_fit :: proc(container: Rect, aspect: f32) -> Rect {
@@ -112,12 +119,29 @@ IMAGE_KEY_TARGET :: u64(1) << 62
 
 // A layer draws its rects, then its images, then its glyphs. With `blur` set, it first blurs what is
 // already drawn under its clip, as frosted glass: a gaussian with that standard deviation in pixels.
+// The scissor limit, when present, is rectangular containment; clip and radius still describe
+// this layer's own rounded mask, not a chain of ancestor masks.
 Layer :: struct {
 	clip:                                             Rect,
 	radius:                                           f32,
 	blur:                                             f32,
+	scissored:                                        bool,
+	scissor_limit:                                    Rect,
 	rect_start, rect_count, glyph_start, glyph_count: int,
 	image_start, image_count:                         int,
+}
+
+@(private)
+Clip_Stack_Top :: struct {
+	id:    u64,
+	layer: int,
+}
+
+// A token from clip_push, to be passed back once, in LIFO order, on the same draw list.
+Clip_Scope :: struct {
+	list:   ^Draw_List,
+	id:     u64,
+	parent: Clip_Stack_Top,
 }
 
 Draw_List :: struct {
@@ -131,6 +155,8 @@ Draw_List :: struct {
 	atlas_generation: u64,
 	// Resetting an attempt preserves diagnostics; only healthy completion rearms them.
 	failure_reported: bool,
+	clip_top:    Clip_Stack_Top,
+	clip_serial: u64,
 }
 
 Atlas_Slot :: struct {
@@ -184,6 +210,7 @@ draw_list_reset :: proc(list: ^Draw_List) {
 	clear(&list.images)
 	list.error = .None
 	list.atlas_generation = 0
+	list.clip_top = {}
 }
 
 draw_list_destroy :: proc(list: ^Draw_List) {
@@ -194,6 +221,8 @@ draw_list_destroy :: proc(list: ^Draw_List) {
 	list^ = {}
 }
 
+// Copies recorded layers, not the source's live scopes. An active destination scope further
+// restricts each copied layer's rectangular scissor without altering its own rounded mask.
 @(require_results)
 append_list :: proc(list: ^Draw_List, source: ^Draw_List) -> Error {
 	if list.error != .None {return list.error}
@@ -207,6 +236,7 @@ append_list :: proc(list: ^Draw_List, source: ^Draw_List) -> Error {
 	}
 	rect_offset, glyph_offset := len(list.rects), len(list.glyphs)
 	image_offset := len(list.images)
+	limit := active_clip(list)
 	append(&list.rects, ..source.rects[:])
 	append(&list.glyphs, ..source.glyphs[:])
 	append(&list.images, ..source.images[:])
@@ -215,6 +245,7 @@ append_list :: proc(list: ^Draw_List, source: ^Draw_List) -> Error {
 		adjusted.rect_start += rect_offset
 		adjusted.glyph_start += glyph_offset
 		adjusted.image_start += image_offset
+		if list.clip_top.id != 0 {limit_layer(&adjusted, limit)}
 		append(&list.layers, adjusted)
 	}
 	return .None
@@ -223,20 +254,25 @@ append_list :: proc(list: ^Draw_List, source: ^Draw_List) -> Error {
 // Where drawing into a list stood, so a later pass can move or fade only what was drawn after it.
 Draw_Mark :: struct {
 	layers, rects, glyphs, images: int,
+	clip_top:                      Clip_Stack_Top,
 }
 
 draw_mark :: proc(list: ^Draw_List) -> Draw_Mark {
-	return {len(list.layers), len(list.rects), len(list.glyphs), len(list.images)}
+	return {len(list.layers), len(list.rects), len(list.glyphs), len(list.images), list.clip_top}
 }
 
-// Moves everything drawn since `mark` by `offset` and keeps it inside `clip`.
+// Moves everything drawn since `mark`, including its recorded clips, while keeping it inside `clip`.
 draw_translate :: proc(list: ^Draw_List, mark: Draw_Mark, offset: [2]f32, clip: Rect) {
 	for &layer in list.layers[mark.layers:] {
-		c := layer.clip
-		left, top := max(c.x + offset.x, clip.x), max(c.y + offset.y, clip.y)
-		right := min(c.x + offset.x + c.width, clip.x + clip.width)
-		bottom := min(c.y + offset.y + c.height, clip.y + clip.height)
-		layer.clip = {left, top, max(0, right - left), max(0, bottom - top)}
+		layer.clip.x += offset.x
+		layer.clip.y += offset.y
+		if layer.scissored {
+			layer.scissor_limit.x += offset.x
+			layer.scissor_limit.y += offset.y
+			layer.scissor_limit = rect_intersect(layer.scissor_limit, clip)
+		} else {
+			layer.clip = rect_intersect(layer.clip, clip)
+		}
 	}
 	for &rect in list.rects[mark.rects:] {rect.rect.x += offset.x; rect.rect.y += offset.y}
 	for &glyph in list.glyphs[mark.glyphs:] {
@@ -257,6 +293,7 @@ draw_scale :: proc(list: ^Draw_List, mark: Draw_Mark, centre: [2]f32, factor: f3
 	}
 	for &layer in list.layers[mark.layers:] {
 		layer.clip = scaled(layer.clip, centre, factor)
+		if layer.scissored {layer.scissor_limit = scaled(layer.scissor_limit, centre, factor)}
 		layer.radius *= factor
 		layer.blur *= factor
 	}
@@ -284,6 +321,7 @@ draw_scale :: proc(list: ^Draw_List, mark: Draw_Mark, centre: [2]f32, factor: f3
 
 // Appends what `source` drew between `from` and `to` to `list`, as a copy that outlives `source`'s next
 // build. The range must start with a layer, so every instance in it belongs to one of its layers.
+// As with append_list, only recorded layers are copied and an active destination scope bounds them.
 @(require_results)
 draw_list_copy :: proc(list: ^Draw_List, source: ^Draw_List, from, to: Draw_Mark) -> Error {
 	if list.error != .None {return list.error}
@@ -297,6 +335,7 @@ draw_list_copy :: proc(list: ^Draw_List, source: ^Draw_List, from, to: Draw_Mark
 	if _, err := append(&list.images, ..source.images[from.images:to.images]); err != nil {
 		list.error = .Out_Of_Memory
 	}
+	limit := active_clip(list)
 	for layer in source.layers[from.layers:to.layers] {
 		copied := layer
 		// Drawing after the range may have gone on into its last layer; the copy keeps only the range.
@@ -306,17 +345,19 @@ draw_list_copy :: proc(list: ^Draw_List, source: ^Draw_List, from, to: Draw_Mark
 		copied.rect_start += base.rects - from.rects
 		copied.glyph_start += base.glyphs - from.glyphs
 		copied.image_start += base.images - from.images
+		if list.clip_top.id != 0 {limit_layer(&copied, limit)}
 		if _, err := append(&list.layers, copied); err != nil {list.error = .Out_Of_Memory}
 	}
 	return list.error
 }
 
-// Forgets everything drawn since `mark`, as if it had never been drawn.
+// Forgets everything drawn since a mark from this list, restoring the scope active at the mark.
 draw_list_truncate :: proc(list: ^Draw_List, mark: Draw_Mark) {
 	resize(&list.layers, mark.layers)
 	resize(&list.rects, mark.rects)
 	resize(&list.glyphs, mark.glyphs)
 	resize(&list.images, mark.images)
+	list.clip_top = mark.clip_top
 	if len(list.layers) == 0 {return}
 	last := &list.layers[len(list.layers) - 1]
 	last.rect_count = clamp(mark.rects - last.rect_start, 0, last.rect_count)
@@ -324,17 +365,91 @@ draw_list_truncate :: proc(list: ^Draw_List, mark: Draw_Mark) {
 	last.image_count = clamp(mark.images - last.image_start, 0, last.image_count)
 }
 
+@(private)
+layer_clip :: proc(layer: ^Layer) -> Rect {
+	if layer.scissored {return rect_intersect(layer.clip, layer.scissor_limit)}
+	return layer.clip
+}
+
+@(private)
+limit_layer :: proc(layer: ^Layer, limit: Rect) {
+	layer.scissor_limit = layer.scissored ? rect_intersect(layer.scissor_limit, limit) : limit
+	layer.scissored = true
+}
+
+@(private)
+active_clip :: proc(list: ^Draw_List) -> Rect {
+	if list.clip_top.id == 0 {return {}}
+	return layer_clip(&list.layers[list.clip_top.layer])
+}
+
+// The current layer's effective rectangle, excluding the rounded mask.
+clip_current :: proc(list: ^Draw_List) -> Rect {
+	if len(list.layers) == 0 {return {}}
+	return layer_clip(&list.layers[len(list.layers) - 1])
+}
+
+// Starts a rectangular scope inside the current layer. Its effective clip is the intersection
+// with that layer's scissor. Layers pushed within the scope keep their own mask but cannot
+// expand that scissor. Push and pop split batches, not the order of primitive types within one.
+@(require_results)
+clip_push :: proc(list: ^Draw_List, clip: Rect) -> (Clip_Scope, Error) {
+	if list.error != .None {return {}, list.error}
+	next := len(list.layers)
+	if next == 0 {
+		list.error = .Invalid_Argument
+		return {}, list.error
+	}
+	layer := layer_continuation(&list.layers[next - 1])
+	layer.scissor_limit = rect_intersect(layer_clip(&layer), clip)
+	layer.scissored = true
+	if err := append_layer(list, &layer); err != .None {return {}, err}
+	list.clip_serial += 1
+	scope := Clip_Scope{list, list.clip_serial, list.clip_top}
+	list.clip_top = {scope.id, next}
+	return scope, .None
+}
+
+// Restores the layer (including its rounded mask) from before clip_push, without replaying blur.
+// A token from an earlier build or an out-of-order pop invalidates the current draw list.
+@(require_results)
+clip_pop :: proc(list: ^Draw_List, scope: Clip_Scope) -> Error {
+	if list.error != .None {return list.error}
+	if scope.list != list || scope.id == 0 || scope.id != list.clip_top.id {
+		list.error = .Invalid_Argument
+		return list.error
+	}
+	layer := layer_continuation(&list.layers[list.clip_top.layer - 1])
+	if err := append_layer(list, &layer); err != .None {return err}
+	list.clip_top = scope.parent
+	return .None
+}
+
+@(private)
+layer_continuation :: proc(previous: ^Layer) -> Layer {
+	return {
+		clip          = previous.clip,
+		radius        = previous.radius,
+		scissored     = previous.scissored,
+		scissor_limit = previous.scissor_limit,
+	}
+}
+
+// Pushes an absolute layer, bounded by the innermost rectangular scope when one is open.
 @(require_results)
 push_layer :: proc(list: ^Draw_List, clip: Rect, radius: f32 = 0) -> Error {
 	if list.error != .None {return list.error}
-	layer := Layer {
-		clip        = clip,
-		radius      = radius,
-		rect_start  = len(list.rects),
-		glyph_start = len(list.glyphs),
-		image_start = len(list.images),
-	}
-	if _, err := append(&list.layers, layer); err != nil {
+	layer := Layer{clip = clip, radius = radius}
+	if list.clip_top.id != 0 {limit_layer(&layer, active_clip(list))}
+	return append_layer(list, &layer)
+}
+
+@(private, require_results)
+append_layer :: proc(list: ^Draw_List, layer: ^Layer) -> Error {
+	layer.rect_start = len(list.rects)
+	layer.glyph_start = len(list.glyphs)
+	layer.image_start = len(list.images)
+	if _, err := append(&list.layers, layer^); err != nil {
 		list.error = .Out_Of_Memory
 	}
 	return list.error

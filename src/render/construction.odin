@@ -37,10 +37,9 @@ frame_build_finish :: proc(build: ^Frame_Build) -> Frame_Build_Result {
 		list.error = .Atlas_Invalidated
 	}
 	// Retain the error so a direct render or evidence read also rejects this frame.
-	clear(&list.layers)
-	clear(&list.rects)
-	clear(&list.glyphs)
-	clear(&list.images)
+	err := list.error
+	draw_list_reset(list)
+	list.error = err
 	if !list.failure_reported {
 		log.errorf("constructing a frame failed: %v", list.error)
 		list.failure_reported = true

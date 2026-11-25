@@ -7,6 +7,7 @@
 // and a screen reader's actions choose, open and select menu rows. It follows its display's DPI and keeps
 // drawing while the user drags or sizes its frame. A lost graphics device is made again. It imports nothing
 // but the cosmos collection. Build it with `odin build examples/starter -collection:cosmos=src`.
+// Settings opens a scrollable form for the export name, playback speed and playhead.
 package main
 
 import "base:runtime"
@@ -58,6 +59,7 @@ Starter :: struct {
 	speed:         f32,
 	pointer:       [2]f32,
 	menu:          Context_Menu,
+	settings:      Settings_Form,
 	// What the last drawn frame showed, as screen readers learn it.
 	access:        ui.Access_Tree,
 	// The file dialog while it is open, and what it chooses.
@@ -116,6 +118,7 @@ starter_init :: proc(s: ^Starter, driver: render.Driver) -> bool {
 	ui.access_init(&s.access)
 	s.list = render.draw_list_init()
 	menu_init(&s.menu)
+	if !settings_init(s) {starter_destroy(s); return false}
 	// Dragging or sizing the frame runs the system's modal loop inside poll_events, which then ticks the
 	// starter from a timer so the window keeps drawing; that tick polls the events the loop has queued.
 	modal_tick :: proc(user: rawptr) {
@@ -137,6 +140,7 @@ starter_destroy :: proc(s: ^Starter) {
 	delete(s.videos)
 	delete(s.export)
 	menu_destroy(&s.menu)
+	settings_destroy(&s.settings)
 	ui.access_destroy(&s.access)
 	render.draw_list_destroy(&s.list)
 	if s.fonts != nil {
@@ -166,11 +170,13 @@ starter_tick :: proc(s: ^Starter) {
 }
 
 starter_event :: proc(s: ^Starter, event: platform.Event) {
+	if settings_event(s, event) {return}
 	#partial switch e in event {
 	case platform.Close_Request_Event:
 		starter_quit(s)
 	case platform.Resize_Event:
 		s.width, s.height = e.width, e.height
+		settings_layout(s, reveal_focus = true)
 		sizing := platform.window_sizing(&s.desktop, s.window)
 		if host.surface_resize(&s.surface, s.device, max(s.width, 1), max(s.height, 1), sizing) == .Device_Lost {
 			starter_recover(s)
@@ -181,6 +187,7 @@ starter_event :: proc(s: ^Starter, event: platform.Event) {
 		ui.text_set_size(&s.text, TEXT_SIZE * s.scale)
 		// An open submenu hangs where the old scale placed it, so the menus close rather than drift.
 		menu_close(s)
+		settings_layout(s, reveal_focus = true)
 	case platform.Appearance_Event:
 		t := theme.default(e.appearance.dark)
 		s.theme = ui.theme_from(t, ui.HOVER_LIFT_DEFAULT, ui.HOVER_GLOSS_DEFAULT)
@@ -201,7 +208,7 @@ starter_event :: proc(s: ^Starter, event: platform.Event) {
 			starter_open_videos(s)
 		case e.key == .S && .Control in e.modifiers:
 			starter_export(s)
-		case e.key == .Escape:
+		case e.key == .Escape && !e.repeat:
 			starter_quit(s)
 		}
 	case platform.Access_Invoke_Event:
@@ -227,10 +234,12 @@ starter_open_videos :: proc(s: ^Starter) {
 starter_export :: proc(s: ^Starter) {
 	if s.pick != nil {return}
 	filters := EXPORT_FILTERS
+	name := ui.field_string(&s.settings.file_name)
+	if name == "" {name = DEFAULT_EXPORT_NAME}
 	options := platform.File_Pick_Options {
 		mode              = .Save,
 		filters           = filters[:],
-		file_name         = "clip.mp4",
+		file_name         = name,
 		default_extension = "mp4",
 	}
 	s.pick = platform.file_pick_start(&s.desktop, s.window, options)
@@ -350,18 +359,19 @@ starter_frame :: proc(s: ^Starter) {
 	}
 }
 
-// The frame's accessibility tree: the viewer, then the menus while they show, with focus on the selected
-// row.
+// The frame's accessibility tree: the video and its context menu, or the open settings dialog.
 starter_access :: proc(s: ^Starter, viewer: render.Rect) {
 	ui.access_begin(&s.access)
-	video := platform.Access_Node {
-		id     = VIEWER_ACCESS,
-		role   = .Image,
-		name   = "Video",
-		bounds = ui.access_bounds(viewer),
+	if s.settings.scope == 0 {
+		ui.access_add(&s.access, {
+			id = VIEWER_ACCESS, role = .Image, name = "Video", bounds = ui.access_bounds(viewer),
+		})
 	}
-	ui.access_add(&s.access, video)
 	focus := menu_access(s)
+	if !s.menu.shown {
+		ui.screen_access(&s.settings.screen, &s.access)
+		focus = ui.access_focused(s.settings.screen.focus)
+	}
 	if err := ui.access_commit(&s.access, &s.desktop, s.window, focus); err != .None {
 		log.errorf("describing the frame to screen readers failed: %v", err)
 	}
@@ -381,9 +391,12 @@ starter_build :: proc(b: Starter_Build) {
 	if render.push_layer(&s.list, full) != .None {return}
 	if render.push_image(&s.list, {rect = viewer, uv = {0, 0, 1, 1}, key = VIEWER_KEY}) != .None {return}
 	// A later layer draws over the video, as timelines, markers and menus would.
-	if render.push_layer(&s.list, viewer) != .None {return}
-	if render.push_rect(&s.list, {rect = marker_rect(viewer, s.scale), color = s.theme.accent}) != .None {return}
+	if s.settings.show_playhead {
+		if render.push_layer(&s.list, viewer) != .None {return}
+		if render.push_rect(&s.list, {rect = marker_rect(viewer, s.scale), color = s.theme.accent}) != .None {return}
+	}
 	if render.push_layer(&s.list, full) != .None {return}
+	if settings_draw(s) != .Ok {return}
 	_ = menu_draw(s)
 }
 

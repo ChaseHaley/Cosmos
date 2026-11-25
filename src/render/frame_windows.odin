@@ -68,6 +68,18 @@ scissor :: proc(clip: Rect, width, height: f32) -> d3d.RECT {
 	}
 }
 
+@(private)
+scoped_scissor :: proc(clip: Rect, width, height: f32) -> d3d.RECT {
+	// D3D pixel centres are at n + 0.5. An explicit scope contains only centres in its
+	// half-open bounds, including when a viewport edge lands between pixel boundaries.
+	return {
+		left   = i32(math.ceil(clamp(clip.x - 0.5, 0, width))),
+		top    = i32(math.ceil(clamp(clip.y - 0.5, 0, height))),
+		right  = i32(math.ceil(clamp(clip.x + clip.width - 0.5, 0, width))),
+		bottom = i32(math.ceil(clamp(clip.y + clip.height - 0.5, 0, height))),
+	}
+}
+
 @(require_results)
 frame_render :: proc(d: ^Device, s: ^Surface, list: ^Draw_List, clear: Color) -> Error {
 	assert(s.owner == d)
@@ -197,13 +209,20 @@ list_draw_range :: proc(
 	}
 	start := clamp(from_layer, 0, len(list.layers))
 	stop := clamp(to_layer, start, len(list.layers))
-	for layer in list.layers[start:stop] {
-		clip := scissor(layer.clip, f32(width), f32(height))
-		if layer.blur > 0 {
-			if err := backdrop_blur(d, target, width, height, layer, constants); err != .None {return err}
-		}
-		if clip.right <= clip.left || clip.bottom <= clip.top {
+	for &layer in list.layers[start:stop] {
+		if layer.blur <= 0 && layer.rect_count == 0 && layer.image_count == 0 && layer.glyph_count == 0 {
 			continue
+		}
+		clip: d3d.RECT
+		if layer.scissored {
+			clip = scoped_scissor(layer_clip(&layer), f32(width), f32(height))
+		} else {
+			clip = scissor(layer.clip, f32(width), f32(height))
+		}
+		if clip.right <= clip.left || clip.bottom <= clip.top {continue}
+		if layer.blur > 0 {
+			if err := backdrop_blur(d, target, width, height, &layer, clip, constants); err != .None {return err}
+			if layer.rect_count == 0 && layer.image_count == 0 && layer.glyph_count == 0 {continue}
 		}
 		c->RSSetScissorRects(1, &clip)
 		constants.round_clip, constants.clip_radius = layer.clip, layer.radius
