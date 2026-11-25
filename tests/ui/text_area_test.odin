@@ -18,11 +18,13 @@ Area_Fixture :: struct {
 }
 
 @(private = "file")
-area_start :: proc(t: ^testing.T, f: ^Area_Fixture, source: string, cache: ^glyphs.Cache = nil) -> bool {
+area_start :: proc(
+	t: ^testing.T, f: ^Area_Fixture, source: string, cache: ^glyphs.Cache = nil, preferred := "",
+) -> bool {
 	err: font.Error
 	f.fonts, err = font.system_create()
 	if !testing.expect_value(t, err, font.Error.None) {return false}
-	if !testing.expect(t, ui.text_init(&f.text, f.fonts, cache, 16)) {return false}
+	if !testing.expect(t, ui.text_init(&f.text, f.fonts, cache, 16, preferred)) {return false}
 	return testing.expect(t, textedit.init(&f.buffer, source))
 }
 
@@ -576,4 +578,110 @@ scrolling_by_lines_leaves_the_caret_where_it_is :: proc(t: ^testing.T) {
 	testing.expect(t, ui.text_area_scroll_lines(box, -5))
 	testing.expect_value(t, f.area.scroll, f32(0))
 	testing.expect(t, !ui.text_area_scroll_lines(box, -1))
+}
+
+@(test)
+text_area_wrap_measures_the_standalone_row :: proc(t: ^testing.T) {
+	f: Area_Fixture
+	if !area_start(t, &f, "0To", preferred = "Segoe UI") {return}
+	defer area_stop(&f)
+	ui.text_set_size(&f.text, 32)
+	prefix := ui.text_width(&f.text, "0To") - ui.text_width(&f.text, "o")
+	standalone := ui.text_width(&f.text, "0T")
+	if !testing.expect(t, prefix < standalone, "the fixture needs T–o kerning") {return}
+	width := (prefix + standalone) / 2 + 2 * ui.CONTROL_INSET
+	lines := line_texts(&f, width)
+	if testing.expect(t, len(lines) > 1) {testing.expect_value(t, lines[0], "0")}
+}
+
+@(test)
+text_area_keeps_tabs_with_the_word_before_them :: proc(t: ^testing.T) {
+	f: Area_Fixture
+	if !area_start(t, &f, "aa \t aa") {return}
+	defer area_stop(&f)
+	expect_lines(t, line_texts(&f, area_width(&f, 2)), {"aa \t ", "aa"})
+}
+
+@(test)
+text_area_keyboard_and_pointer_share_grapheme_stops :: proc(t: ^testing.T) {
+	f: Area_Fixture
+	if !area_start(t, &f, "e\u0301x\r\ne\u0301y") {return}
+	defer area_stop(&f)
+	box := area_box(&f, area_width(&f, 8), 1, 5)
+	first_end :: len("e\u0301")
+	second_start :: len("e\u0301x\r\n")
+	second_end :: len("e\u0301x\r\ne\u0301")
+	textedit.move(&f.buffer, 1)
+	first := ui.text_area_caret_rect(box, 0)
+	testing.expect_value(t, ui.text_area_caret_rect(box, 1), first)
+	ui.text_area_horizontal(box, true, false, false)
+	testing.expect_value(t, f.buffer.caret, first_end)
+	ui.text_area_vertical(box, 1, 0, false)
+	testing.expect_value(t, f.buffer.caret, second_end)
+	ui.text_area_vertical(box, -1, 0, false)
+	testing.expect_value(t, f.buffer.caret, first_end)
+	textedit.move(&f.buffer, 1)
+	ui.text_area_horizontal(box, false, false, false)
+	testing.expect_value(t, f.buffer.caret, 0)
+	textedit.move(&f.buffer, 1)
+	ui.text_area_vertical(box, 1, 0, false)
+	testing.expect_value(t, f.buffer.caret, second_start)
+	ui.text_area_horizontal(box, false, false, false)
+	testing.expect_value(t, f.buffer.caret, len("e\u0301x"))
+	ui.text_area_horizontal(box, true, false, false)
+	testing.expect_value(t, f.buffer.caret, second_start)
+	textedit.move(&f.buffer, second_start + 1)
+	ui.text_area_vertical(box, -1, 0, false)
+	testing.expect_value(t, f.buffer.caret, 0)
+	testing.expect(t, ui.text_area_pointer(box, first.x, first.y + 1, true, false, 2))
+	testing.expect_value(t, textedit.selected_text(&f.buffer), "e\u0301x")
+	second := ui.text_area_caret_rect(box, second_start)
+	testing.expect(t, ui.text_area_pointer(box, second.x, second.y + 1, false, false))
+	testing.expect_value(t, textedit.selected_text(&f.buffer), "e\u0301x\r\ne\u0301y")
+	testing.expect(t, ui.text_area_release(&f.area))
+	ui.text_area_horizontal(box, false, true, false)
+	ui.text_area_horizontal(box, true, true, false)
+	testing.expect_value(t, f.buffer.caret, len("e\u0301x"))
+	ui.text_area_horizontal(box, false, true, false)
+	testing.expect_value(t, f.buffer.caret, 0)
+}
+
+@(test)
+text_area_erase_keeps_clusters_and_crlf_whole_across_undo :: proc(t: ^testing.T) {
+	f: Area_Fixture
+	source :: "e\u0301x\r\ny"
+	if !area_start(t, &f, source) {return}
+	defer area_stop(&f)
+	textedit.move(&f.buffer, 1)
+	testing.expect(t, ui.text_area_erase(&f.buffer, true, false))
+	testing.expect_value(t, textedit.to_string(&f.buffer), "x\r\ny")
+	testing.expect(t, ui.text_area_erase(&f.buffer, true, true))
+	testing.expect_value(t, textedit.to_string(&f.buffer), "\r\ny")
+	testing.expect(t, ui.text_area_erase(&f.buffer, true, false))
+	testing.expect_value(t, textedit.to_string(&f.buffer), "y")
+	testing.expect(t, textedit.undo(&f.buffer))
+	testing.expect_value(t, textedit.to_string(&f.buffer), source)
+	testing.expect_value(t, f.buffer.caret, 1)
+	testing.expect(t, textedit.redo(&f.buffer))
+	testing.expect_value(t, textedit.to_string(&f.buffer), "y")
+}
+
+@(test)
+text_area_erase_a_partial_selection_undoes_as_a_separate_edit :: proc(t: ^testing.T) {
+	f: Area_Fixture
+	source :: "xe\u0301y"
+	if !area_start(t, &f, source) {return}
+	defer area_stop(&f)
+	textedit.move(&f.buffer, 1)
+	textedit.move(&f.buffer, 2, true)
+	testing.expect(t, ui.text_area_erase(&f.buffer, false, false))
+	testing.expect_value(t, textedit.to_string(&f.buffer), "xy")
+	testing.expect(t, ui.text_area_erase(&f.buffer, false, false))
+	testing.expect_value(t, textedit.to_string(&f.buffer), "y")
+	testing.expect(t, textedit.undo(&f.buffer))
+	testing.expect_value(t, textedit.to_string(&f.buffer), "xy")
+	testing.expect(t, textedit.undo(&f.buffer))
+	testing.expect_value(t, textedit.to_string(&f.buffer), source)
+	testing.expect_value(t, f.buffer.anchor, 1)
+	testing.expect_value(t, f.buffer.caret, 2)
 }

@@ -1,6 +1,7 @@
 package ui_test
 
 import "cosmos:font"
+import "cosmos:input"
 import "cosmos:render"
 import "cosmos:ui"
 import "core:testing"
@@ -41,4 +42,30 @@ field_box_offset_agrees_with_its_frame_at_two_scales :: proc(t: ^testing.T) {
 		top := baseline-styled.ascent
 		testing.expect_value(t, top-rect.y, rect.y+rect.height-(top+styled.line_height))
 	}
+}
+
+@(test)
+field_box_double_click_and_backspace_take_the_whole_accented_word :: proc(t: ^testing.T) {
+	fonts, err := font.system_create()
+	if !testing.expect_value(t, err, font.Error.None) {return}
+	defer font.system_destroy(fonts)
+	text: ui.Text
+	if !testing.expect(t, ui.text_init(&text, fonts, nil, 16)) {return}
+	field: ui.Text_Field
+	defer delete(field.bytes)
+	ui.field_set(&field, "e\u0301x!")
+	box := ui.Field_Box {
+		field = &field,
+		text = &text,
+		rect = {20, 30, 240, 32},
+		inset = 10,
+		style = .Body,
+		scale = 1,
+	}
+	frame := ui.field_box_text_rect(box)
+	at := ui.field_box_offset(box, frame.x + 1)
+	ui.field_pointer(&field, at, true, false, 2)
+	testing.expect_value(t, ui.field_selected_text(&field), "e\u0301x")
+	ui.field_key(&field, input.Key_Event{key = .Backspace, pressed = true})
+	testing.expect_value(t, ui.field_string(&field), "!")
 }

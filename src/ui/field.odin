@@ -7,7 +7,7 @@ import "core:unicode"
 import "core:unicode/utf8"
 
 // One line of editable text. The selection runs between anchor and cursor; they are equal when
-// nothing is selected. Both are byte offsets on rune boundaries. `dragging` holds from a pointer press
+// nothing is selected. Both are byte offsets on grapheme boundaries. `dragging` holds from a pointer press
 // in the field until its owner calls field_release; `unit` is what that press selected, so a drag after
 // a double click grows the selection by whole words from `word_from` to `word_to`. `caret` is how its
 // caret last moved on screen. `clicks` is the field's run of pointer presses, which its owner counts.
@@ -107,6 +107,7 @@ field_text :: proc(f: ^Text_Field, text: string) -> Field_Change {
 		f.cursor += n
 		change = .Edited
 	}
+	if change == .Edited {f.cursor = grapheme_ceil(field_string(f), f.cursor)}
 	f.anchor = f.cursor
 	return change
 }
@@ -120,40 +121,56 @@ atom_edge :: proc(f: ^Text_Field, at: int, forward: bool) -> int {
 	return at
 }
 
-// How far back from a caret the field looks for a place to segment grapheme clusters from; only an
-// absurdly long cluster reaches further.
-@(private = "file")
-GRAPHEME_LOOKBACK :: 64
-
-// Whether `r` continues the grapheme cluster before it, whatever that cluster is.
-@(private = "file")
-grapheme_joins :: proc(r: rune) -> bool {
-	return unicode.is_gcb_extend_class(r) || unicode.is_spacing_mark(r) || r == unicode.ZERO_WIDTH_JOINER ||
-	       unicode.is_regional_indicator(r) || unicode.is_hangul_syllable_vowel(r) ||
-	       unicode.is_hangul_syllable_trailing(r)
-}
-
-// The start of the grapheme cluster that ends at `at`. Segmenting only runs forward, so it starts from a
-// nearby place a cluster starts at: between two ASCII characters, or a rune that joins nothing before it
-// at least GRAPHEME_LOOKBACK bytes back.
-@(private = "file")
-grapheme_before :: proc(s: string, at: int) -> int {
-	from := at
-	for from > 0 {
-		r, size := utf8.decode_last_rune_in_string(s[:from])
-		from -= size
-		if from == 0 || (r < 0x80 && s[from - 1] < 0x80) {break}
-		if at - from >= GRAPHEME_LOOKBACK && !grapheme_joins(r) {break}
+// Start the forward iterator at a known break, not an arbitrary lookback. The ASCII shortcut
+// cannot cut an Extend, Prepend, Hangul, Indic, emoji or RI sequence, and excludes CRLF.
+@(private)
+grapheme_restart :: proc(s: string, offset: int) -> int {
+	at := min(offset, len(s) - 1)
+	for at > 0 {
+		before, after := s[at - 1], s[at]
+		if before == '\n' ||
+		   (before < 0x80 && after < 0x80 && !(before == '\r' && after == '\n')) {
+			return at
+		}
+		at -= 1
 	}
-	start := from
-	it := utf8.decode_grapheme_iterator_make(s[from:at])
-	for _, g in utf8.decode_grapheme_iterate(&it) {start = from + g.byte_index}
-	return start
+	return 0
 }
 
-// The end of the grapheme cluster that starts at `at`.
-@(private = "file")
+// The boundary at `at`, or the start of the cluster containing it.
+@(private)
+grapheme_floor :: proc(s: string, offset: int) -> int {
+	at := clamp(offset, 0, len(s))
+	if at == 0 || at == len(s) {return at}
+	start := grapheme_restart(s, at)
+	if start == at {return at}
+	it := utf8.decode_grapheme_iterator_make(s[start:])
+	for cluster, g in utf8.decode_grapheme_iterate(&it) {
+		if start + g.byte_index + len(cluster) > at {return start + g.byte_index}
+	}
+	return len(s)
+}
+
+// The boundary strictly to the left of `at`, even when `at` is inside a cluster.
+@(private)
+grapheme_before :: proc(s: string, at: int) -> int {
+	return grapheme_floor(s, at - 1)
+}
+
+@(private)
+grapheme_ceil :: proc(s: string, offset: int) -> int {
+	at := clamp(offset, 0, len(s))
+	start := grapheme_floor(s, at)
+	return start < at ? grapheme_after(s, start) : start
+}
+
+// The end of the cluster whose confirmed start is `at`.
+@(private)
 grapheme_after :: proc(s: string, at: int) -> int {
+	if at + 1 >= len(s) {return len(s)}
+	if s[at] < 0x80 && s[at + 1] < 0x80 {
+		return at + (s[at] == '\r' && s[at + 1] == '\n' ? 2 : 1)
+	}
 	it := utf8.decode_grapheme_iterator_make(s[at:])
 	cluster, _, _ := utf8.decode_grapheme_iterate(&it)
 	return at + len(cluster)
@@ -169,107 +186,127 @@ caret_stop_left :: proc(f: ^Text_Field, at: int) -> int {
 // The caret stop after `at`: the end of the grapheme cluster after it, or of the atom holding that.
 caret_stop_right :: proc(f: ^Text_Field, at: int) -> int {
 	if at >= len(f.bytes) {return len(f.bytes)}
-	return atom_edge(f, grapheme_after(field_string(f), at), true)
+	s := field_string(f)
+	return atom_edge(f, grapheme_after(s, grapheme_floor(s, at)), true)
 }
 
+// Listed in the order preferred when the pointer lands between two classes.
 @(private)
-field_word_rune :: proc(r: rune) -> bool {
-	return unicode.is_letter(r) || unicode.is_digit(r) || r == '_'
-}
-
-@(private)
-Field_Word_Class :: enum u8 {
+Grapheme_Word_Class :: enum u8 {
 	None,
 	Space,
-	Word,
 	Other,
+	Word,
 }
 
 @(private)
-field_word_class :: proc(r: rune) -> Field_Word_Class {
+grapheme_word_class :: proc(s: string, at: int) -> Grapheme_Word_Class {
+	if at >= len(s) {return .None}
+	r, _ := utf8.decode_rune(s[at:])
 	switch {
 	case unicode.is_space(r): return .Space
-	case field_word_rune(r): return .Word
+	case unicode.is_letter(r) || unicode.is_digit(r) || r == '_': return .Word
 	}
 	return .Other
 }
 
-// The word at `at`, as Ctrl+Left and Ctrl+Right take words, and as a Markdown editor's double click does:
-// a run of word characters, or on spaces or other marks (a URL's `/ . : ? & = # -`) the run of those. A
-// caret between two kinds takes the word it touches, so the end of a word selects the word, not the mark
-// after it. An empty field selects nothing.
+// Walk a run backward in blocks rather than resegmenting the same prefix for each cluster.
 @(private)
-field_word_at :: proc(f: ^Text_Field, offset: int) -> (from, to: int) {
-	at := clamp(offset, 0, len(f.bytes))
-	before, after: Field_Word_Class
-	if at > 0 {
-		r, _ := utf8.decode_last_rune(f.bytes[:at])
-		before = field_word_class(r)
+grapheme_class_start :: proc(s: string, at: int, class: Grapheme_Word_Class) -> int {
+	at := at
+	for at > 0 {
+		from := grapheme_restart(s, max(0, at - CLIP_BYTES))
+		start := from
+		it := utf8.decode_grapheme_iterator_make(s[from:at])
+		for cluster, g in utf8.decode_grapheme_iterate(&it) {
+			if grapheme_word_class(cluster, 0) != class {start = from + g.byte_index + len(cluster)}
+		}
+		if start > from {return start}
+		at = from
 	}
-	if at < len(f.bytes) {
-		r, _ := utf8.decode_rune(f.bytes[at:])
-		after = field_word_class(r)
-	}
-	class: Field_Word_Class
-	switch {
-	case after == .Word || before == .Word: class = .Word
-	case after == .Other || before == .Other: class = .Other
-	case after == .Space || before == .Space: class = .Space
-	case: return at, at
-	}
+	return 0
+}
+
+// At a run boundary prefer a word, then punctuation, then spaces.
+@(private)
+grapheme_word_at :: proc(s: string, offset: int) -> (from, to: int) {
+	at := grapheme_floor(s, offset)
+	before := at > 0 ? grapheme_word_class(s, grapheme_before(s, at)) : Grapheme_Word_Class.None
+	after := grapheme_word_class(s, at)
+	class := u8(before) > u8(after) ? before : after
 	from, to = at, at
-	for from > 0 {
-		r, size := utf8.decode_last_rune(f.bytes[:from])
-		if field_word_class(r) != class {break}
-		from -= size
+	if before == class {from = grapheme_class_start(s, at, class)}
+	it := utf8.decode_grapheme_iterator_make(s[at:])
+	for cluster, _ in utf8.decode_grapheme_iterate(&it) {
+		if grapheme_word_class(cluster, 0) != class {break}
+		to += len(cluster)
 	}
-	for to < len(f.bytes) {
-		r, size := utf8.decode_rune(f.bytes[to:])
-		if field_word_class(r) != class {break}
-		to += size
-	}
+	return
+}
+
+@(private)
+field_word_at :: proc(f: ^Text_Field, at: int) -> (from, to: int) {
+	from, to = grapheme_word_at(field_string(f), at)
 	return atom_edge(f, from, false), atom_edge(f, to, true)
 }
 
-// Back over spaces, then over a word or a run of punctuation, matching markdown edit_word_left.
+// Back over spaces, then over a word or a run of punctuation.
 @(private)
 word_left :: proc(f: ^Text_Field, at: int) -> int {
+	s := field_string(f)
 	i := at
 	for i > 0 {
-		r, _ := utf8.decode_last_rune(f.bytes[:i])
-		if !unicode.is_space(r) {break}
-		i = caret_stop_left(f, i)
-	}
-	if i <= 0 {return 0}
-	r, _ := utf8.decode_last_rune(f.bytes[:i])
-	word := field_word_rune(r)
-	for i > 0 {
-		previous, _ := utf8.decode_last_rune(f.bytes[:i])
-		if unicode.is_space(previous) || field_word_rune(previous) != word {break}
-		i = caret_stop_left(f, i)
+		previous := grapheme_before(s, i)
+		class := grapheme_word_class(s, previous)
+		if len(f.atoms) == 0 {
+			i = grapheme_class_start(s, i, class)
+			if class != .Space {return i}
+			continue
+		}
+		if class != .Space {
+			for i > 0 && grapheme_word_class(s, grapheme_before(s, i)) == class {
+				i = caret_stop_left(f, i)
+			}
+			return i
+		}
+		i = atom_edge(f, previous, false)
 	}
 	return i
 }
 
-// Forward over a word or a run of punctuation, then the spaces after it, matching markdown edit_word_right.
+// Forward over a word or a run of punctuation, then the spaces after it.
+@(private)
+grapheme_word_right :: proc(s: string, offset: int, same_line: bool) -> int {
+	at := grapheme_floor(s, offset)
+	class := grapheme_word_class(s, at)
+	it := utf8.decode_grapheme_iterator_make(s[at:])
+	for cluster, _ in utf8.decode_grapheme_iterate(&it) {
+		next := grapheme_word_class(cluster, 0)
+		if next == .Space {
+			if same_line && (cluster[0] == '\r' || cluster[0] == '\n') {break}
+			class = .Space
+		} else if next != class {
+			break
+		}
+		at += len(cluster)
+	}
+	return at
+}
+
 @(private)
 word_right :: proc(f: ^Text_Field, at: int) -> int {
-	i := at
-	if i < len(f.bytes) {
-		r, _ := utf8.decode_rune(f.bytes[i:])
-		if !unicode.is_space(r) {
-			word := field_word_rune(r)
-			for i < len(f.bytes) {
-				next, _ := utf8.decode_rune(f.bytes[i:])
-				if unicode.is_space(next) || field_word_rune(next) != word {break}
-				i = caret_stop_right(f, i)
-			}
+	s := field_string(f)
+	if len(f.atoms) == 0 {return grapheme_word_right(s, at, false)}
+	i := grapheme_floor(s, at)
+	class := grapheme_word_class(s, i)
+	for i < len(s) {
+		next := grapheme_word_class(s, i)
+		if next == .Space {
+			class = .Space
+		} else if next != class {
+			break
 		}
-	}
-	for i < len(f.bytes) {
-		next, _ := utf8.decode_rune(f.bytes[i:])
-		if !unicode.is_space(next) {break}
-		i = caret_stop_right(f, i)
+		i = atom_edge(f, grapheme_after(s, i), true)
 	}
 	return i
 }
@@ -318,6 +355,8 @@ field_key :: proc(f: ^Text_Field, e: input.Key_Event) -> Field_Change {
 		}
 		if start == end {return .None}
 		field_delete_range(f, start, end)
+		f.cursor = grapheme_floor(field_string(f), f.cursor)
+		f.anchor = f.cursor
 		return .Edited
 	}
 	if !control || .Alt in e.modifiers {return field_text(f, e.text)}
@@ -341,7 +380,7 @@ View_Window :: struct {
 view_window_back :: proc(w: ^View_Window) {
 	w.behind += text_line_x(w.line, w.end - w.start)
 	w.end, w.start = w.start, max(0, w.start - CLIP_BYTES)
-	for w.start > 0 && (w.value[w.start] & 0xC0) == 0x80 {w.start -= 1}
+	w.start = grapheme_floor(w.value, w.start)
 	w.line = text_line(w.text, w.value[w.start:w.end])
 }
 
@@ -349,8 +388,9 @@ view_window_back :: proc(w: ^View_Window) {
 // text up to the caret fits. It walks left from the caret one stop at a time through windows of the text
 // before it, so a long line costs only the text the view reaches into.
 field_view_start :: proc(f: ^Text_Field, text: ^Text, available: f32) -> int {
-	start := f.cursor
-	w := View_Window{text = text, value = field_string(f), start = f.cursor, end = f.cursor}
+	value := field_string(f)
+	start := grapheme_floor(value, f.cursor)
+	w := View_Window{text = text, value = value, start = start, end = start}
 	for start > 0 {
 		if start == w.start {view_window_back(&w)}
 		previous := atom_edge(f, w.start + text_line_previous(w.line, start - w.start), false)
