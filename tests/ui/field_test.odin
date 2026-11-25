@@ -247,3 +247,70 @@ field_view_starts_at_the_earliest_caret_stop_that_fits :: proc(t: ^testing.T) {
 	testing.expect_value(t, ui.field_view_start(&f, &text, 1), 3)
 	testing.expect_value(t, ui.field_view_start(&f, &text, 100), 0)
 }
+
+@(test)
+field_word_edits_and_drag_keep_combining_clusters_whole :: proc(t: ^testing.T) {
+	f: ui.Text_Field
+	defer delete(f.bytes)
+	ui.field_set(&f, "e\u0301x e\u0301y")
+	ui.field_pointer(&f, 0, true, false, 2)
+	testing.expect_value(t, ui.field_selected_text(&f), "e\u0301x")
+	ui.field_pointer(&f, 8, false, false)
+	testing.expect_value(t, ui.field_selected_text(&f), "e\u0301x e\u0301y")
+	ui.field_release(&f)
+	ui.field_key(&f, key({key = .Home}))
+	ui.field_key(&f, key({key = .Arrow_Right, modifiers = {.Control}}))
+	testing.expect_value(t, f.cursor, 5)
+	ui.field_key(&f, key({key = .Arrow_Left, modifiers = {.Control}}))
+	testing.expect_value(t, f.cursor, 0)
+	ui.field_key(&f, key({key = .Delete, modifiers = {.Control}}))
+	testing.expect_value(t, ui.field_string(&f), "e\u0301y")
+	ui.field_key(&f, key({key = .End}))
+	ui.field_key(&f, key({key = .Backspace, modifiers = {.Control}}))
+	testing.expect_value(t, ui.field_string(&f), "")
+}
+
+@(test)
+field_left_and_backspace_take_a_long_zwj_cluster_whole :: proc(t: ^testing.T) {
+	f: ui.Text_Field
+	defer delete(f.bytes)
+	// All thirteen women belong to one cluster, longer than the old 64-byte lookback.
+	cluster := "👩‍👩‍👩‍👩‍👩‍👩‍👩‍👩‍👩‍👩‍👩‍👩‍👩"
+	ui.field_set(&f, cluster)
+	ui.field_key(&f, key({key = .Arrow_Left}))
+	testing.expect_value(t, f.cursor, 0)
+	ui.field_key(&f, key({key = .Arrow_Right}))
+	testing.expect_value(t, f.cursor, len(cluster))
+	ui.field_key(&f, key({key = .Backspace}))
+	testing.expect_value(t, ui.field_string(&f), "")
+}
+
+@(test)
+field_scroll_never_starts_on_a_combining_mark :: proc(t: ^testing.T) {
+	fonts, err := font.system_create()
+	if !testing.expect_value(t, err, font.Error.None) {return}
+	defer font.system_destroy(fonts)
+	text: ui.Text
+	if !testing.expect(t, ui.text_init(&text, fonts, nil, 16)) {return}
+	f: ui.Text_Field
+	defer delete(f.bytes)
+	suffix := strings.repeat("x", 510, context.temp_allocator)
+	value, join_err := strings.concatenate({"e\u0301", suffix}, context.temp_allocator)
+	if !testing.expect(t, join_err == nil) {return}
+	ui.field_set(&f, value)
+	accent_and_suffix := ui.field_string(&f)[1:]
+	width := ui.text_width(&text, accent_and_suffix) + 0.25
+	testing.expect(t, width < ui.text_width(&text, ui.field_string(&f)))
+	testing.expect_value(t, ui.field_view_start(&f, &text, width), len("e\u0301"))
+}
+
+@(test)
+field_left_preserves_regional_indicator_pairs_and_crlf :: proc(t: ^testing.T) {
+	f: ui.Text_Field
+	defer delete(f.bytes)
+	ui.field_set(&f, "🇦🇧🇨🇩🇪\r\nx")
+	for at in ([?]int{len("🇦🇧🇨🇩🇪\r\n"), len("🇦🇧🇨🇩🇪"), len("🇦🇧🇨🇩"), len("🇦🇧"), 0}) {
+		ui.field_key(&f, key({key = .Arrow_Left}))
+		testing.expect_value(t, f.cursor, at)
+	}
+}

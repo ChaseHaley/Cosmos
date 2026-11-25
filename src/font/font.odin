@@ -27,6 +27,8 @@ Shaped_Glyph :: struct {
 	cluster: int,
 	advance: f32,
 	offset:  [2]f32,
+	// Inclusive index of the last source rune represented by this glyph's shaping cluster.
+	source_last: int,
 }
 
 Face_Metrics :: struct {

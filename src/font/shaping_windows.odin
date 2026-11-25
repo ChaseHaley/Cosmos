@@ -163,7 +163,7 @@ shape :: proc(
 			if found {
 				_, err := append(
 					&p.result,
-					Shaped_Glyph{g, start, glyph_advance(s, g, size_px), {}},
+					Shaped_Glyph{g, start, glyph_advance(s, g, size_px), {}, end - 1},
 				)
 				if err != nil {return .Out_Of_Memory}
 			}
@@ -183,7 +183,7 @@ shape :: proc(
 			if found {
 				_, err := append(
 					&p.result,
-					Shaped_Glyph{g, start, glyph_advance(s, g, size_px), {}},
+					Shaped_Glyph{g, start, glyph_advance(s, g, size_px), {}, start},
 				)
 				if err != nil {return .Out_Of_Memory}
 			}
@@ -376,7 +376,7 @@ shape_fallback :: proc(
 	for r, i in runes {
 		g, found := glyph_lookup(s, family, style, r)
 		if !found {continue}
-		if _, err := append(&p.result, Shaped_Glyph{g, base + i, glyph_advance(s, g, size), {}});
+		if _, err := append(&p.result, Shaped_Glyph{g, base + i, glyph_advance(s, g, size), {}, base + i});
 		   err != nil {
 			return .Out_Of_Memory
 		}
@@ -551,6 +551,7 @@ shape_script :: proc(s: ^System, id: Face_Id, start, end: int, size, scale: f32,
 			f32(p.metrics[i].advanceWidth) * scale / f32(face.metrics.designUnitsPerEm),
 		}
 		o := p.offsets[i]
+		// Use the source map, even when later clusters have no glyph in the final output.
 		_, err := append(
 			&p.result,
 			Shaped_Glyph {
@@ -558,6 +559,7 @@ shape_script :: proc(s: ^System, id: Face_Id, start, end: int, size, scale: f32,
 				p.rune_map[start + cluster],
 				p.advances[i],
 				{o.advanceOffset, o.ascenderOffset},
+				p.rune_map[start + max(cluster, next - 1)],
 			},
 		)
 		if err != nil {return .Out_Of_Memory}

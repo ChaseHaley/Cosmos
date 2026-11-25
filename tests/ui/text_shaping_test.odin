@@ -5,6 +5,7 @@ import "cosmos:glyphs"
 import "cosmos:render"
 import "cosmos:test_fonts"
 import "cosmos:ui"
+import "core:mem"
 import "core:testing"
 import "core:time"
 
@@ -94,6 +95,115 @@ kerned_text_that_fits_draws_whole_and_wraps_by_its_shaped_width :: proc(t: ^test
 	}
 }
 
+@(test)
+wrap_drops_kerning_against_the_next_line_when_fitting_a_prefix :: proc(t: ^testing.T) {
+	f: Kerned_Fixture
+	if !kerned_start(t, &f) {return}
+	defer kerned_stop(&f)
+	value :: "0To"
+	kerned_prefix := ui.text_width(&f.text, value) - ui.text_width(&f.text, "o")
+	drawn_prefix := ui.text_width(&f.text, "0T")
+	width := (kerned_prefix + drawn_prefix) / 2
+	if !testing.expect(t, kerned_prefix < width && width < drawn_prefix) {return}
+	lines: [dynamic]string
+	defer delete(lines)
+	ui.wrap(&f.text, value, width, &lines)
+	if testing.expect_value(t, len(lines), 2) {
+		testing.expect_value(t, lines[0], "0")
+		testing.expect_value(t, lines[1], "To")
+		for line in lines {testing.expect(t, ui.text_width(&f.text, line) <= width)}
+	}
+}
+
+@(test)
+wrap_keeps_hanging_spaces_and_advances_past_one_overwide_grapheme :: proc(t: ^testing.T) {
+	f: Kerned_Fixture
+	if !kerned_start(t, &f) {return}
+	defer kerned_stop(&f)
+	lines: [dynamic]string
+	defer delete(lines)
+	ui.wrap(&f.text, "0  T", ui.text_width(&f.text, "0"), &lines)
+	if testing.expect_value(t, len(lines), 2) {
+		testing.expect_value(t, lines[0], "0 ")
+		testing.expect_value(t, lines[1], "T")
+	}
+	value :: "A\u0301B"
+	ui.wrap(&f.text, value, ui.text_width(&f.text, "A\u0301") / 2, &lines)
+	if testing.expect_value(t, len(lines), 2) {
+		testing.expect_value(t, lines[0], "A\u0301")
+		testing.expect_value(t, lines[1], "B")
+	}
+}
+
+@(test)
+wrap_keeps_a_grapheme_larger_than_its_shaping_scratch_whole :: proc(t: ^testing.T) {
+	f: Kerned_Fixture
+	if !kerned_start(t, &f) {return}
+	defer kerned_stop(&f)
+	bytes: [2 * (ui.CLIP_BYTES + 1) + 2]u8
+	last := len(bytes) - 1
+	bytes[0], bytes[last] = 'A', 'B'
+	for i := 1; i < last; i += 2 {bytes[i], bytes[i + 1] = 0xCC, 0x81} // U+0301
+	value := string(bytes[:])
+	cluster_width := ui.text_width(&f.text, value[:last])
+	if !testing.expect(t, cluster_width > 0) {return}
+	lines: [dynamic]string
+	defer delete(lines)
+	ui.wrap(&f.text, value, cluster_width / 2, &lines)
+	if testing.expect_value(t, len(lines), 2) {
+		testing.expect_value(t, lines[0], value[:last])
+		testing.expect_value(t, lines[1], "B")
+	}
+}
+
+@(test)
+warm_short_labels_measure_and_draw_without_temporary_allocation :: proc(t: ^testing.T) {
+	f: Kerned_Fixture
+	if !kerned_start(t, &f) {return}
+	defer kerned_stop(&f)
+	expected := last_glyph(t, &f, "OK", 0)
+	width := ui.text_width(&f.text, "OK")
+	render.draw_list_reset(&f.list)
+	_ = render.push_layer(&f.list, {0, 0, 800, 100})
+	allocator := context.temp_allocator
+	context.temp_allocator = mem.nil_allocator()
+	measured := ui.text_width(&f.text, "OK")
+	drawn := ui.draw_text(&f.text, &f.list, "OK", 0, 50, {1, 1, 1, 1})
+	context.temp_allocator = allocator
+	testing.expect_value(t, measured, width)
+	testing.expect_value(t, drawn, render.Build_Status.Ok)
+	if testing.expect_value(t, len(f.list.glyphs), 2) {
+		testing.expect_value(t, f.list.glyphs[1].rect, expected)
+	}
+}
+
+@(test)
+ellipsis_lookahead_keeps_held_glyphs_when_a_later_piece_fits :: proc(t: ^testing.T) {
+	f: Kerned_Fixture
+	if !kerned_start(t, &f) {return}
+	defer kerned_stop(&f)
+	bytes: [ui.CLIP_BYTES + 2]u8
+	bytes[0], bytes[1] = 'W', 'A'
+	for i := 2; i < ui.CLIP_BYTES; i += 2 {
+		bytes[i], bytes[i + 1] = 0xCD, 0xB8 // U+0378; the first piece has only two drawn glyphs.
+	}
+	bytes[ui.CLIP_BYTES], bytes[ui.CLIP_BYTES + 1] = 'i', 'i'
+	value := string(bytes[:])
+	width := ui.text_width(&f.text, value)
+	testing.expect(t, ui.text_width(&f.text, "WA") > width - ui.text_width(&f.text, ui.ELLIPSIS))
+	_ = last_glyph(t, &f, value, 0)
+	if !testing.expect_value(t, len(f.list.glyphs), 4) {return}
+	expected := f.list.glyphs[1]
+	render.draw_list_reset(&f.list)
+	_ = render.push_layer(&f.list, {0, 0, 800, 100})
+	result := ui.draw_text(&f.text, &f.list, value, 0, 50, {1, 1, 1, 1}, width)
+	testing.expect_value(t, result, render.Build_Status.Ok)
+	if testing.expect_value(t, len(f.list.glyphs), 4) {
+		testing.expect_value(t, f.list.glyphs[1].atlas, expected.atlas)
+		testing.expect_value(t, f.list.glyphs[1].rect, expected.rect)
+	}
+}
+
 // The caret after a kerned glyph stands where the next glyph is drawn, and a click there finds it.
 @(test)
 a_field_caret_after_a_kerned_glyph_stands_at_the_next_drawn_glyph :: proc(t: ^testing.T) {
@@ -119,6 +229,33 @@ a_field_caret_after_a_kerned_glyph_stands_at_the_next_drawn_glyph :: proc(t: ^te
 	testing.expectf(t, at < 10 + ui.text_width(&f.text, "T"), "the caret at %v ignores the kerning", at)
 	testing.expect_value(t, drawn, last_glyph(t, &f, "o", at))
 	testing.expect_value(t, ui.field_offset_at(&field, &f.text, 0, 10, at), 1)
+}
+
+@(test)
+a_missing_cluster_has_no_advance_and_does_not_share_the_previous_glyph :: proc(t: ^testing.T) {
+	f: Kerned_Fixture
+	if !kerned_start(t, &f) {return}
+	defer kerned_stop(&f)
+	carets: ui.Carets
+	f.text.carets = &carets
+	carets.style = {shape = .Bar, stroke = 1}
+	field: ui.Text_Field
+	defer delete(field.bytes)
+	ui.field_set(&field, "A\u0378B")
+	a_width := ui.text_width(&f.text, "A")
+	testing.expect_value(t, ui.text_width(&f.text, "A\u0378"), a_width)
+	for offset in ([2]int{1, 3}) {
+		field.cursor, field.anchor = offset, offset
+		ui.carets_begin(&carets, {}, render.frame_time_at(time.tick_add({}, time.Second)))
+		render.draw_list_reset(&f.list)
+		_ = render.push_layer(&f.list, {0, 0, 800, 100})
+		result := ui.field_draw(&field, &f.list, &f.text, {}, 10, 50, 400, true, "", {1, 1, 1, 1})
+		testing.expect_value(t, result, render.Build_Status.Ok)
+		if !testing.expect(t, carets.claim.present && len(f.list.glyphs) == 2) {return}
+		testing.expect_value(t, carets.claim.paint.target.x, 10 + a_width)
+	}
+	testing.expect_value(t, ui.field_offset_at(&field, &f.text, 0, 10, 10 + a_width * 0.4), 0)
+	testing.expect_value(t, ui.field_offset_at(&field, &f.text, 0, 10, 10 + a_width * 0.75), 1)
 }
 
 // An accent typed as a combining mark is one character with its letter: the caret, the pointer and
