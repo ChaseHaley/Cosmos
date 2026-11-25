@@ -381,7 +381,9 @@ Wrap_Lines :: struct {
 }
 
 // The next line's byte range; the space a line breaks at belongs to neither line. Widths are measured
-// along the whole string as the font shapes it, a grapheme cluster at a time.
+// along the whole string as the font shapes it, a grapheme cluster at a time. A space never breaks a line
+// itself: it hangs past the width, so text that fits up to the space stays whole and the break comes at
+// the first character that does not fit.
 wrap_next :: proc(w: ^Wrap_Lines) -> (start, end: int, ok: bool) {
 	if w.line.x == nil && w.s != "" {
 		w.line = text_line(w.text, w.s)
@@ -392,8 +394,10 @@ wrap_next :: proc(w: ^Wrap_Lines) -> (start, end: int, ok: bool) {
 		offset := w.offset
 		w.offset = text_line_next(w.line, offset)
 		advance := text_line_x(w.line, w.offset) - text_line_x(w.line, offset)
+		// A space a mark sits on is a cluster of its own, not a place to break.
+		space := w.s[offset] == ' ' && w.offset == offset + 1
 		broke := false
-		if w.line_width + advance > w.width && offset > w.line_start {
+		if !space && w.line_width + advance > w.width && offset > w.line_start {
 			broke, start = true, w.line_start
 			if w.last_space > w.line_start {
 				end = w.last_space
@@ -406,10 +410,7 @@ wrap_next :: proc(w: ^Wrap_Lines) -> (start, end: int, ok: bool) {
 			w.last_space = -1
 		}
 		w.line_width += advance
-		// A space a mark sits on is a cluster of its own, not a place to break.
-		if w.s[offset] == ' ' && w.offset == offset + 1 {
-			w.last_space, w.width_through_space = offset, w.line_width
-		}
+		if space {w.last_space, w.width_through_space = offset, w.line_width}
 		if broke {return start, end, true}
 	}
 	if w.line_start < len(w.s) {
