@@ -1,6 +1,5 @@
 package main
 
-import "core:fmt"
 import "core:time"
 import "cosmos:input"
 import "cosmos:platform"
@@ -16,8 +15,10 @@ Menu_Action :: enum u32 {
 	Quit,
 }
 
-// The playback speeds the Speed submenu offers; a row's payload is its index.
+// The playback speeds the Speed submenu offers, and their rows' labels; a row's payload is its index. The
+// labels are constants because the menu keeps them across ticks, which free their temporary memory.
 SPEEDS :: [?]f32{0.5, 1, 2}
+SPEED_LABELS :: [len(SPEEDS)]string{"0.5×", "1×", "2×"}
 // The submenu's width in DIPs.
 SPEED_MENU_WIDTH :: 160
 // The menus' nodes in the window's accessibility tree.
@@ -69,10 +70,15 @@ menu_close :: proc(s: ^Starter) {
 speed_open :: proc(s: ^Starter, row: int, select_first: bool) {
 	sub := &s.menu.submenu
 	ui.menu_clear(&sub.menu)
-	speeds := SPEEDS
+	speeds, labels := SPEEDS, SPEED_LABELS
 	for speed, i in speeds {
-		label := fmt.tprintf("%g×", speed)
-		_ = ui.menu_add(&sub.menu, {label = label, enabled = true, checked = speed == s.speed, payload = u32(i)})
+		item := ui.Menu_Item {
+			label   = labels[i],
+			enabled = true,
+			checked = speed == s.speed,
+			payload = u32(i),
+		}
+		_ = ui.menu_add(&sub.menu, item)
 	}
 	ui.submenu_place(sub, &s.menu.menu, row, SPEED_MENU_WIDTH, select_first, f32(s.width), f32(s.height), s.scale)
 }
