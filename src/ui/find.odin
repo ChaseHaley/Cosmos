@@ -500,7 +500,8 @@ FIND_ACCESS_STATUS :: max(u64) - 1
 // "Find" as its hint says, then its toggles as Check_Boxes, `status` as a Status so a new count is read
 // out, and the arrows and the close button as Buttons; the arrows are Disabled unless `enabled`.
 //
-// `id` is the query's; when the app registers the bar with Focus it passes platform.Access_Id of that
+// `id` is the query's; it stays registered even when clipped to zero width because the bar can still
+// have the keyboard. When the app registers the bar with Focus it passes platform.Access_Id of that
 // Focus_Id, and gives the bar the keyboard with find_focus when assistive technology focuses `id`.
 find_access :: proc(
 	f: ^Find_Bar,
@@ -513,13 +514,10 @@ find_access :: proc(
 ) {
 	if f.state == nil { return }
 	l := find_draw_layout(base, status, width, scale)
-	if l.panel.width <= 2 * FIND_PADDING * scale { return }
 	group := access_part(id, FIND_ACCESS_GROUP)
 	access_add(t, {id = group, parent = parent, role = .Group, name = name, bounds = access_bounds(l.panel)})
-	if l.query.width > 0 {
-		access_add(t, {id = id, parent = group, role = .Text_Field, name = FIND_HINT,
-			value = field_string(&f.query), bounds = access_bounds(l.query), states = {.Focusable}})
-	}
+	access_add(t, {id = id, parent = group, role = .Text_Field, name = FIND_HINT,
+		value = field_string(&f.query), bounds = access_bounds(l.query), states = {.Focusable}})
 	toggles := [?]struct {
 		area:   render.Rect,
 		button: Find_Button,
