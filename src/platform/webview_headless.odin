@@ -76,6 +76,7 @@ when HEADLESS {
 
 	webview_set_color_scheme :: proc(view: Webview, scheme: Webview_Color_Scheme) {}
 	webview_set_zoom :: proc(view: Webview, zoom: f64) {}
+	webview_set_visual_scale :: proc(view: Webview, scale: f32) {}
 	webview_navigate :: proc(view: Webview, url: string) {}
 	webview_go_back :: proc(view: Webview) {}
 	webview_go_forward :: proc(view: Webview) {}
