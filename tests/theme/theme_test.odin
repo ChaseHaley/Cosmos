@@ -122,3 +122,21 @@ ids_follow_the_family_grammar :: proc(t: ^testing.T) {
 	testing.expect_value(t, theme.legacy_base("studio-light"), "studio-light")
 	testing.expect_value(t, theme.legacy_base("tokyonight-moon-light"), "tokyonight-day")
 }
+
+// A light system's default is the bundled light theme, and the default stays the dark one.
+@(test)
+the_light_default_is_the_bundled_light_theme :: proc(t: ^testing.T) {
+	light := theme.default(dark = false)
+	testing.expect(t, light.light, "the light default has a dark window")
+	testing.expect(t, !theme.default().light, "the default is not dark")
+	found := false
+	for file in testkit.BUNDLED_THEMES {
+		if file.name != "studio-light.theme.json" {continue}
+		found = true
+		bundled, issue := theme.from_text(string(file.data))
+		testing.expect_value(t, issue, "")
+		testing.expect_value(t, light.colors[.Window], bundled.colors[.Window])
+		testing.expect_value(t, light.colors[.Accent], bundled.colors[.Accent])
+	}
+	testing.expect(t, found, "studio-light is not bundled")
+}

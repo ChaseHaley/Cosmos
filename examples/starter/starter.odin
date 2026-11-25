@@ -1,5 +1,6 @@
 // The Cosmos starter: one window with a 16:9 viewer that a renderer outside Cosmos draws into, as a video
-// player would, and a playhead marker over it, in the family's default theme. A right click opens a menu
+// player would, and a playhead marker over it, in the family's default theme for a light or dark system,
+// with a frame to match; both follow the system when it changes. A right click opens a menu
 // with a Playback speed submenu; Ctrl+O opens videos and Ctrl+S picks where to export, in the system
 // dialogs; a worker probes the chosen videos and hands its results back through an inbox. Every frame it
 // draws it describes to screen readers too: the viewer and the open menus, with the selected row focused,
@@ -44,7 +45,7 @@ Starter :: struct {
 	scale:         f32,
 	run:           host.Run,
 	clock:         host.Clock,
-	// The family's default theme as the widgets draw it.
+	// The family's default theme for the system's light or dark mode, as the widgets draw it.
 	theme:         ui.Theme,
 	fonts:         ^font.System,
 	cache:         glyphs.Cache,
@@ -92,9 +93,14 @@ main :: proc() {
 @(require_results)
 starter_init :: proc(s: ^Starter, driver: render.Driver) -> bool {
 	if platform.init(&s.desktop, "CosmosStarter") != .Primary {return false}
-	window, window_error := platform.window_create(&s.desktop, {title = "Cosmos starter", width = 1280, height = 720})
+	t := theme.default(platform.system_appearance(&s.desktop).dark)
+	window, window_error := platform.window_create(
+		&s.desktop,
+		{title = "Cosmos starter", width = 1280, height = 720, dark = !t.light},
+	)
 	if window_error != .None {return false}
 	s.window, s.driver, s.speed = window, driver, 1
+	s.theme = ui.theme_from(t, ui.HOVER_LIFT_DEFAULT, ui.HOVER_GLOSS_DEFAULT)
 	s.width, s.height, _ = platform.window_client_size(&s.desktop, window)
 	s.scale = starter_scale(platform.window_dpi(&s.desktop, window))
 	device_error: render.Error
@@ -107,7 +113,6 @@ starter_init :: proc(s: ^Starter, driver: render.Driver) -> bool {
 	if fonts_error != .None {return false}
 	glyphs.init(&s.cache, s.fonts, s.device)
 	if !ui.text_init(&s.text, s.fonts, &s.cache, TEXT_SIZE * s.scale) {return false}
-	s.theme = ui.theme_from(theme.default(), ui.HOVER_LIFT_DEFAULT, ui.HOVER_GLOSS_DEFAULT)
 	ui.access_init(&s.access)
 	s.list = render.draw_list_init()
 	menu_init(&s.menu)
@@ -176,6 +181,12 @@ starter_event :: proc(s: ^Starter, event: platform.Event) {
 		ui.text_set_size(&s.text, TEXT_SIZE * s.scale)
 		// An open submenu hangs where the old scale placed it, so the menus close rather than drift.
 		menu_close(s)
+	case platform.Appearance_Event:
+		t := theme.default(e.appearance.dark)
+		s.theme = ui.theme_from(t, ui.HOVER_LIFT_DEFAULT, ui.HOVER_GLOSS_DEFAULT)
+		if platform.window_set_dark(&s.desktop, s.window, !t.light) != .None {
+			log.error("matching the frame to the theme failed")
+		}
 	case input.Mouse_Move_Event:
 		s.pointer = {f32(e.x), f32(e.y)}
 		menu_hover(s, s.pointer, host.clock_now(&s.clock))

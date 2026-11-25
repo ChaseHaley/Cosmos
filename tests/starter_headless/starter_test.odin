@@ -9,6 +9,7 @@ import "cosmos:host"
 import "cosmos:input"
 import "cosmos:platform"
 import "cosmos:render"
+import "cosmos:theme"
 import "cosmos:ui"
 import starter "../../examples/starter"
 
@@ -301,4 +302,31 @@ screen_readers_read_and_work_the_context_menu :: proc(t: ^testing.T) {
 	testing.expect_value(t, platform.access_invoke(&s.desktop, s.window, quit.id, .Invoke), platform.Error.None)
 	starter.starter_tick(&s)
 	testing.expect(t, s.run == .Quit, "Invoke on Quit did not quit")
+}
+
+// The starter opens in the dark theme with a dark frame on the dark headless system, and follows the system
+// to the light theme and frame and back.
+@(test)
+the_starter_follows_the_system_between_light_and_dark :: proc(t: ^testing.T) {
+	s: starter.Starter
+	if !open(t, &s) {return}
+	defer starter.starter_destroy(&s)
+	dark := ui.theme_from(theme.default(), ui.HOVER_LIFT_DEFAULT, ui.HOVER_GLOSS_DEFAULT)
+	light := ui.theme_from(theme.default(dark = false), ui.HOVER_LIFT_DEFAULT, ui.HOVER_GLOSS_DEFAULT)
+	testing.expect_value(t, s.theme.window, dark.window)
+	testing.expect(t, platform.window_dark(&s.desktop, s.window), "the dark theme opened with a light frame")
+
+	platform.set_system_appearance(&s.desktop, {dark = false})
+	starter.starter_tick(&s)
+	testing.expect_value(t, s.theme.window, light.window)
+	testing.expect(t, !platform.window_dark(&s.desktop, s.window), "the light theme kept the dark frame")
+	pixels, ok := read_frame(t, &s)
+	if !ok {return}
+	defer delete(pixels)
+	expect_color(t, pixels, s.width, 4, 4, light.window, "light background")
+
+	platform.set_system_appearance(&s.desktop, {dark = true})
+	starter.starter_tick(&s)
+	testing.expect_value(t, s.theme.window, dark.window)
+	testing.expect(t, platform.window_dark(&s.desktop, s.window), "the dark theme kept the light frame")
 }

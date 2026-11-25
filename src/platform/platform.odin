@@ -23,11 +23,19 @@ Error :: enum {
 	// A service failed to start earlier and is not tried again.
 	Unavailable,
 }
+// `dark` asks for the immersive dark frame; Windows that cannot draw one keeps the light frame.
 Window_Desc :: struct {
 	title:            string,
 	width, height:    i32,
 	hidden, inactive: bool,
 	tabbed_title_bar: bool,
+	dark:             bool,
+}
+// The system's appearance: whether apps should be dark, whether high contrast is on, and the accent
+// colour as RGB, none when Windows records none.
+Appearance :: struct {
+	dark, high_contrast: bool,
+	accent:              Maybe([3]u8),
 }
 // The window's own caption buttons, in their order from the left at the right edge of the title bar.
 Caption_Button :: enum u8 {
@@ -136,6 +144,10 @@ Files_Drop_Event :: struct {
 }
 Activate_Request_Event :: struct {}
 Settings_Event :: struct {}
+// The system's appearance changed; one event per change, whatever number of windows the app has.
+Appearance_Event :: struct {
+	appearance: Appearance,
+}
 Wake_Event :: struct {}
 Webview_Event :: struct {}
 Window_Moved_Event :: struct {
@@ -221,6 +233,7 @@ Event :: union {
 	Notification_Error_Event,
 	Activate_Request_Event,
 	Settings_Event,
+	Appearance_Event,
 	Files_Drag_Event,
 	Files_Drop_Event,
 	Wake_Event,

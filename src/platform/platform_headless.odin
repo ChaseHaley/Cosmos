@@ -56,6 +56,7 @@ when HEADLESS {
 		cursor:                           Cursor_Shape,
 		title_height, title_controls_end: i32,
 		frame_color, frame_text:          [3]u8,
+		dark:                             bool,
 		progress:                         Progress_State,
 		progress_percent:                 int,
 		// The accessibility tree window_access_set last stored; its strings live in access_text.
@@ -113,6 +114,8 @@ when HEADLESS {
 		modal_callback:   proc(user: rawptr),
 		modal_user:       rawptr,
 		next_thumbnail:   u32,
+		// What system_appearance reports; set_system_appearance changes it.
+		appearance:       Appearance,
 	}
 
 	// The two platform services that take no Platform read these.
@@ -159,6 +162,7 @@ when HEADLESS {
 			tray_menu     = make([dynamic]Tray_Menu_Item, allocator),
 			file_picks    = make([dynamic]File_Pick_Record, allocator),
 		}
+		p.appearance = DEFAULT_APPEARANCE
 		if _, err := append(&p.displays, DEFAULT_DISPLAY); err != nil {return .Failed}
 		success = true
 		return .Primary
@@ -220,6 +224,22 @@ when HEADLESS {
 		if _, err := append(&p.displays, ..displays); err != nil {return .Out_Of_Memory}
 		for window, i in p.windows {dpi_follow(p, window, previous[i])}
 		return .None
+	}
+
+	// A dark system with no high contrast and no accent colour, the same on every machine.
+	DEFAULT_APPEARANCE :: Appearance {
+		dark = true,
+	}
+
+	system_appearance :: proc(p: ^Platform) -> Appearance {
+		return p.appearance
+	}
+
+	// Changes the simulated appearance, reporting it as WM_SETTINGCHANGE does when it differs.
+	set_system_appearance :: proc(p: ^Platform, appearance: Appearance) {
+		if appearance == p.appearance {return}
+		p.appearance = appearance
+		enqueue(p, Appearance_Event{appearance})
 	}
 
 	@(private)
@@ -462,6 +482,7 @@ when HEADLESS {
 		step := i32(len(p.windows) % 8) * 32
 		left, top := p.displays[0].rect.left + step, p.displays[0].rect.top + step
 		window.rect = {left, top, left + desc.width, top + desc.height}
+		window.dark = desc.dark
 		if _, err := append(&p.windows, window); err != nil {
 			window_free(p, window)
 			return 0, .Out_Of_Memory
@@ -714,6 +735,20 @@ when HEADLESS {
 		if window == nil {return .Invalid_Window}
 		window.frame_color, window.frame_text = rgb, foreground
 		return .None
+	}
+
+	@(require_results)
+	window_set_dark :: proc(p: ^Platform, id: input.Window_Id, dark: bool) -> Error {
+		window := find_window(p, id)
+		if window == nil {return .Invalid_Window}
+		window.dark = dark
+		return .None
+	}
+
+	// Whether the window has the dark frame, for tests to read; false for no such window.
+	window_dark :: proc(p: ^Platform, id: input.Window_Id) -> bool {
+		window := find_window(p, id)
+		return window != nil && window.dark
 	}
 
 	@(require_results)
