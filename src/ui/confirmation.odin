@@ -42,7 +42,10 @@ confirmation_asking :: proc(q: ^Maybe($Q), $T: typeid) -> ^T {
 }
 
 // Asks about `subject`, presenting it as stated, as a scope of the window's Focus with the dialog's focus
-// ids from `id` (see confirm_open). The owner has released any question shown before.
+// ids from `id` (see confirm_open). The owner has released any question shown before. A question that
+// replaces one still asking takes over its focus scope, so answering it gives focus back to the control
+// that had it before the first question.
+// The replacement uses its own focus ids, presentation and fresh interaction state.
 confirmation_ask :: proc(
 	q: ^Maybe($Q),
 	f: ^Focus,
@@ -52,10 +55,13 @@ confirmation_ask :: proc(
 	focus := Confirm_Button.Accept,
 	show_option := false,
 ) where intrinsics.type_is_specialization_of(Q, Confirmation) {
-	c: Q
+	c := confirmation_shown(q)
+	if c == nil {
+		q^ = Q{}
+		c = confirmation_shown(q)
+	}
 	c.subject = subject
 	confirm_open(&c.dialog, f, id, extended, focus, show_option)
-	q^ = c
 }
 
 // Answers the asking question: the dialog starts closing with its subject intact and gives focus back,
