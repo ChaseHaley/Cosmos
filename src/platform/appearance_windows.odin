@@ -15,7 +15,13 @@ when !HEADLESS {
 	window_set_dark :: proc(p: ^Platform, id: input.Window_Id, dark: bool) -> Error {
 		window := find_window(p, id)
 		if window == nil {return .Invalid_Window}
-		if hr := frame_dark_set(window.hwnd, dark); hr < 0 {
+		hr := frame_dark_set(window.hwnd, dark)
+		// Windows before 10 20H1 has no such attribute; its frame stays light, as in window_create.
+		if u32(hr) == w.E_INVALIDARG {
+			log.warnf("DwmSetWindowAttribute(dark) failed: HRESULT %x; the frame stays light", u32(hr))
+			return .None
+		}
+		if hr < 0 {
 			log.errorf("DwmSetWindowAttribute(dark) failed: HRESULT %x", u32(hr))
 			return .Os
 		}
