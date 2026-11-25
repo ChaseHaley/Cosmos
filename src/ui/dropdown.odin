@@ -756,6 +756,9 @@ Dropdown_Open :: struct {}
 // `id` is the Combo_Box's; when the app registers the field with Focus it passes platform.Access_Id of
 // the field's Focus_Id. An option's id is access_part(id, i) for its index i into `choices`, so it keeps
 // its id while a search filters the list.
+//
+// Returns the focus id to use for access_commit when the dropdown owns the keyboard: the switch or
+// highlighted option if it was registered, otherwise the Combo_Box `id`.
 dropdown_access :: proc(
 	d: ^Dropdown,
 	c: Dropdown_Choices,
@@ -765,14 +768,16 @@ dropdown_access :: proc(
 	name, value: string,
 	open: bool,
 	scale: f32,
-) {
+) -> platform.Access_Id {
 	combo: bit_set[platform.Access_State;u16] = {.Focusable}
 	if open {combo += {.Expanded}} else {combo += {.Collapsed}}
 	access_add(t, {id = id, parent = parent, role = .Combo_Box, name = name, value = value,
 		bounds = access_bounds(a.field), states = combo})
-	if !open {return}
+	if !open {return id}
 	r := dropdown_rect(d, c, a, scale)
-	if r.width == 0 {return}
+	if r.width <= 0 {return id}
+	focus := id
+	fonts_focused := c.searchable && c.font_filter && d.toggle_focus
 	s := scale
 	if c.searchable {
 		access_add(t, {id = access_part(id, DROPDOWN_ACCESS_SEARCH), parent = id, role = .Text_Field,
@@ -788,15 +793,17 @@ dropdown_access :: proc(
 	if fonts := dropdown_toggle_rect(c, r, s); fonts.width > 0 {
 		states: bit_set[platform.Access_State;u16]
 		if c.show_all_fonts {states += {.Checked}}
-		access_add(t, {id = access_part(id, DROPDOWN_ACCESS_FONTS), parent = id, role = .Check_Box,
+		switch_id := access_part(id, DROPDOWN_ACCESS_FONTS)
+		access_add(t, {id = switch_id, parent = id, role = .Check_Box,
 			name = DROPDOWN_FONTS_TEXT, bounds = access_bounds(fonts), states = states})
+		if fonts_focused {focus = switch_id}
 	}
 	header := dropdown_header(c, s)
 	options := render.Rect{r.x, r.y + header, r.width, r.height - header}
 	if empty := dropdown_empty_text(d, c); c.searchable && empty != "" {
 		access_add(t, {id = access_part(id, DROPDOWN_ACCESS_EMPTY), parent = id, role = .Text, name = empty,
 			bounds = access_bounds(options)})
-		return
+		return focus
 	}
 	list := access_part(id, DROPDOWN_ACCESS_LIST)
 	access_add(t, {id = list, parent = id, role = .List, name = name, bounds = access_bounds(options)})
@@ -807,24 +814,16 @@ dropdown_access :: proc(
 		if i >= count {break}
 		source := dropdown_source(d, c, i)
 		states: bit_set[platform.Access_State;u16]
-		if i == d.list.index {states += {.Selected}}
+		selected := i == d.list.index
+		if selected {states += {.Selected}}
 		if c.multiple && source < len(c.marked) && c.marked[source] {states += {.Checked}}
-		access_add(t, {id = access_part(id, u64(source)), parent = list, role = .List_Item,
+		option := access_part(id, u64(source))
+		access_add(t, {id = option, parent = list, role = .List_Item,
 			name = dropdown_label(c, source), bounds = access_bounds(dropdown_option_rect(options, right, row, s)),
 			states = states})
+		if selected && !fonts_focused {focus = option}
 	}
-}
-
-// The node the open list's keyboard is on, for access_commit: the Show all fonts switch after Tab moved
-// there, else the highlighted option, else the Combo_Box `id`.
-dropdown_access_focus :: proc(
-	d: ^Dropdown,
-	c: Dropdown_Choices,
-	id: platform.Access_Id,
-) -> platform.Access_Id {
-	if c.searchable && c.font_filter && d.toggle_focus {return access_part(id, DROPDOWN_ACCESS_FONTS)}
-	if source := dropdown_highlighted(d, c); source >= 0 {return access_part(id, u64(source))}
-	return id
+	return focus
 }
 
 // Does what assistive technology asked of a node dropdown_access added under `id`, as the pointer and keys

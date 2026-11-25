@@ -1,6 +1,8 @@
 package platform_test
 
+import "cosmos:input"
 import p "cosmos:platform"
+import "core:fmt"
 import "core:strconv"
 import "core:sync"
 import "core:testing"
@@ -9,11 +11,10 @@ import "core:time"
 import w "core:sys/windows"
 import "core:unicode/utf16"
 
-// The provider is driven through the UI Automation client API, as a screen reader drives it. The client
-// runs on its own thread while the test thread, the window's STA, pumps messages: UI Automation marshals
-// every provider call to that thread, so a client on it would wait on itself. core:sys/windows has no
-// UI Automation client interfaces, so the few used are declared here, with the slots before and between
-// them kept as padding in the order UIAutomationClient.h gives.
+// Drive the provider as a screen reader would. An MTA client makes requests while the hidden window's
+// STA pumps messages; a client on the STA would wait on itself. The STA also runs apart from the test
+// runner, whose Windows signal handler treats even handled first-chance COM exceptions as failures.
+// The client interfaces below keep their SDK vtable order, including unused slots.
 
 foreign import access_oleaut32 "system:oleaut32.lib"
 
@@ -38,6 +39,10 @@ IID_Expand_Collapse_Pattern := w.GUID {
 }
 @(private = "file")
 IID_Value_Pattern := w.GUID{0xa94cd8b1, 0x0844, 0x4cd6, {0x9d, 0x2d, 0x64, 0x05, 0x37, 0xab, 0x39, 0xe9}}
+@(private = "file")
+IID_Selection_Item_Pattern := w.GUID {
+	0xa8efa66a, 0x0fda, 0x421a, {0x91, 0x94, 0x38, 0x02, 0x1f, 0x35, 0x78, 0xea},
+}
 
 @(private = "file")
 UIA_INVOKE_PATTERN :: 10000
@@ -45,6 +50,8 @@ UIA_INVOKE_PATTERN :: 10000
 UIA_VALUE_PATTERN :: 10002
 @(private = "file")
 UIA_EXPAND_COLLAPSE_PATTERN :: 10005
+@(private = "file")
+UIA_SELECTION_ITEM_PATTERN :: 10010
 @(private = "file")
 UIA_TOGGLE_PATTERN :: 10015
 @(private = "file")
@@ -55,6 +62,10 @@ UIA_CHECK_BOX :: 50002
 UIA_COMBO_BOX :: 50003
 @(private = "file")
 UIA_EDIT :: 50004
+@(private = "file")
+UIA_LIST_ITEM :: 50007
+@(private = "file")
+UIA_LIST :: 50008
 @(private = "file")
 UIA_TEXT :: 50020
 @(private = "file")
@@ -178,6 +189,15 @@ Value_Pattern :: struct #raw_union {
 }
 
 @(private = "file")
+Selection_Item_Pattern :: struct #raw_union {
+	#subtype iunknown: w.IUnknown,
+	using vtable: ^struct {
+		using unknown: w.IUnknown_VTable,
+		Select:        proc "system" (this: ^Selection_Item_Pattern) -> w.HRESULT,
+	},
+}
+
+@(private = "file")
 release :: proc "contextless" (object: rawptr) {
 	if object != nil {
 		unknown := (^w.IUnknown)(object)
@@ -185,7 +205,7 @@ release :: proc "contextless" (object: rawptr) {
 	}
 }
 
-// Where the client is. The test thread changes the tree at Changing and destroys the window at Closing.
+// The STA changes the tree at Changing and destroys the window at Closing.
 @(private = "file")
 Phase :: enum i32 {
 	Reading,
@@ -193,7 +213,6 @@ Phase :: enum i32 {
 	Changed,
 	Closing,
 	Closed,
-	Done,
 }
 
 @(private = "file")
@@ -238,6 +257,7 @@ Client :: struct {
 	toggle_result:          w.HRESULT,
 	expand_result:          w.HRESULT,
 	set_value_result:       w.HRESULT,
+	select_result:          w.HRESULT,
 	button_has_toggle:      bool,
 	removed_name_result:    w.HRESULT,
 	renamed:                Text,
@@ -302,7 +322,7 @@ child_count :: proc(walker: ^Tree_Walker, parent: ^Element) -> int {
 // Records the app's nodes under `parent` in reading order and keeps each one's element in `held`.
 // Other children, such as the title bar the window's own provider adds, have no numeric AutomationId.
 @(private = "file")
-walk :: proc(client: ^Client, walker: ^Tree_Walker, parent: ^Element, parent_id: u64, held: ^[8]^Element) {
+walk :: proc(client: ^Client, walker: ^Tree_Walker, parent: ^Element, parent_id: u64, held: ^[9]^Element) {
 	child: ^Element
 	if !check(client, walker->GetFirstChildElement(parent, &child), "GetFirstChildElement") {return}
 	for child != nil {
@@ -344,13 +364,15 @@ pattern :: proc(client: ^Client, element: ^Element, id: i32, iid: ^w.GUID, $T: t
 	if element == nil {return nil}
 	out: rawptr
 	if !check(client, element->GetCurrentPatternAs(id, iid, &out), "GetCurrentPatternAs") {return nil}
+	if out == nil {
+		check(client, transmute(w.HRESULT)u32(w.E_NOINTERFACE), "GetCurrentPatternAs (required pattern unavailable)")
+	}
 	return (^T)(out)
 }
 
 @(private = "file")
 run_client :: proc(worker: ^thread.Thread) {
 	client := (^Client)(worker.data)
-	defer phase_set(client, .Done)
 	if !check(client, w.CoInitializeEx(nil, .MULTITHREADED), "CoInitializeEx") {return}
 	defer w.CoUninitialize()
 	automation: ^Automation
@@ -378,7 +400,7 @@ run_client :: proc(worker: ^thread.Thread) {
 		take_text(root_name, &client.root_name)
 	}
 	check(client, root->get_CurrentControlType(&client.root_type), "get_CurrentControlType(root)")
-	held: [8]^Element
+	held: [9]^Element
 	defer {
 		for element in held {release(element)}
 	}
@@ -423,6 +445,17 @@ run_client :: proc(worker: ^thread.Thread) {
 		client.expand_result = expand->Expand()
 		release(expand)
 	}
+	selection := pattern(
+		client,
+		held[8],
+		UIA_SELECTION_ITEM_PATTERN,
+		&IID_Selection_Item_Pattern,
+		Selection_Item_Pattern,
+	)
+	if selection != nil {
+		client.select_result = selection->Select()
+		release(selection)
+	}
 
 	phase_set(client, .Changing)
 	if !await_phase(client, .Changed) {return}
@@ -448,13 +481,79 @@ run_client :: proc(worker: ^thread.Thread) {
 	}
 }
 
+@(private = "file")
+Fixture :: struct {
+	nodes:                     []p.Access_Node,
+	client:                    Client,
+	window:                    input.Window_Id,
+	origin_x, origin_y:        i32,
+	init_result:               p.Init_Result,
+	create_error, set_error:   p.Error,
+	origin_error, pump_error:  p.Error,
+	change_error, close_error: p.Error,
+	shutdown_error:            p.Error,
+	client_started:           bool,
+	requests:                 [4]p.Access_Invoke_Event,
+	request_count:            int,
+}
+
+@(private = "file")
+run_fixture :: proc(sta: ^thread.Thread) {
+	fixture := (^Fixture)(sta.data)
+	platform: p.Platform
+	fixture.init_result = p.init(&platform, "AIODev.Test.Access")
+	if fixture.init_result != .Primary {return}
+	defer {fixture.shutdown_error = p.destroy(&platform)}
+	fixture.window, fixture.create_error = p.window_create(
+		&platform, {hidden = true, title = "Access", width = 400, height = 300},
+	)
+	if fixture.create_error != .None {return}
+	id := fixture.window
+	nodes := fixture.nodes
+	fixture.set_error = p.window_access_set(&platform, id, nodes, 2)
+	if fixture.set_error != .None {return}
+	fixture.origin_x, fixture.origin_y, fixture.origin_error = p.window_to_screen(&platform, id, 0, 0)
+
+	client := &fixture.client
+	client.window = w.HWND(p.window_native_handle(&platform, id))
+	worker := thread.create(run_client)
+	if worker == nil {return}
+	worker.data = client
+	thread.start(worker)
+	fixture.client_started = true
+	// Keep pumping after window destruction, including during COM release and client thread cleanup.
+	for !thread.is_done(worker) {
+		events, poll_error := p.poll_events(&platform)
+		if poll_error != .None {fixture.pump_error = poll_error}
+		for event in events {
+			if request, is_request := event.(p.Access_Invoke_Event); is_request {
+				if fixture.request_count < len(fixture.requests) {
+					fixture.requests[fixture.request_count] = request
+				}
+				fixture.request_count += 1
+			}
+		}
+		#partial switch phase_get(client) {
+		case .Changing:
+			// The check box goes and the button is renamed, as a frame that changed them would set.
+			changed := [?]p.Access_Node{nodes[0], nodes[1], nodes[3], nodes[4], nodes[5], nodes[6], nodes[7]}
+			changed[1].name = "Save all"
+			fixture.change_error = p.window_access_set(&platform, id, changed[:], 2)
+			phase_set(client, .Changed)
+		case .Closing:
+			fixture.close_error = p.window_destroy(&platform, id)
+			phase_set(client, .Closed)
+		}
+		_, wait_error := p.wait_events(&platform, 5, nil)
+		if wait_error != .None {fixture.pump_error = wait_error}
+	}
+	thread.destroy(worker)
+}
+
 @(test)
 ui_automation_reads_and_drives_the_access_tree :: proc(t: ^testing.T) {
-	platform: p.Platform
-	if !testing.expect_value(t, p.init(&platform, "AIODev.Test.Access"), p.Init_Result.Primary) {return}
-	defer testing.expect_value(t, p.destroy(&platform), p.Error.None)
-	id, err := p.window_create(&platform, {hidden = true, title = "Access", width = 400, height = 300})
-	if !testing.expect_value(t, err, p.Error.None) {return}
+	// The spawned threads use their own default contexts. Only the runner thread owns assertions
+	// and reads the results after the STA and its client have both exited.
 	nodes := [?]p.Access_Node {
 		{id = 1, role = .Group, name = "Toolbar", bounds = {0, 0, 400, 40}},
 		{id = 2, parent = 1, role = .Button, name = "Save", bounds = {8, 4, 80, 32}, states = {.Focusable}},
@@ -483,44 +582,36 @@ ui_automation_reads_and_drives_the_access_tree :: proc(t: ^testing.T) {
 			states = {.Focusable, .Collapsed},
 		},
 		{id = 6, role = .Status, name = "Saved", bounds = {0, 280, 400, 20}},
+		{id = 7, role = .List, name = "Files", bounds = {8, 140, 120, 80}},
+		{id = 8, parent = 7, role = .List_Item, name = "README", bounds = {8, 140, 120, 20}, states = {.Focusable}},
 	}
-	if !testing.expect_value(t, p.window_access_set(&platform, id, nodes[:], 2), p.Error.None) {return}
-	origin_x, origin_y, origin_error := p.window_to_screen(&platform, id, 0, 0)
-	testing.expect_value(t, origin_error, p.Error.None)
-
-	client := Client {
-		window = w.HWND(p.window_native_handle(&platform, id)),
-	}
-	worker := thread.create(run_client)
+	fixture := Fixture{nodes = nodes[:]}
+	worker := thread.create(run_fixture)
 	if !testing.expect(t, worker != nil) {return}
-	worker.data = &client
+	worker.data = &fixture
 	thread.start(worker)
-	requests := make([dynamic]p.Access_Invoke_Event, context.temp_allocator)
-	poll_failed := false
 	start := time.tick_now()
-	for phase_get(&client) != .Done && time.tick_since(start) < 30 * time.Second {
-		events, poll_error := p.poll_events(&platform)
-		poll_failed ||= poll_error != .None
-		for event in events {
-			if request, is_request := event.(p.Access_Invoke_Event); is_request {append(&requests, request)}
+	for !thread.is_done(worker) {
+		if time.tick_since(start) > 30 * time.Second {
+			// Do not abandon a blocked COM apartment or kill one thread while others still use it.
+			fmt.eprintln("UI Automation STA fixture did not exit within 30 seconds")
+			w.TerminateProcess(w.GetCurrentProcess(), 1)
+			w.ExitProcess(1)
 		}
-		#partial switch phase_get(&client) {
-		case .Changing:
-			// The check box goes and the button is renamed, as a frame that changed them would set.
-			changed := [?]p.Access_Node{nodes[0], nodes[1], nodes[3], nodes[4], nodes[5]}
-			changed[1].name = "Save all"
-			testing.expect_value(t, p.window_access_set(&platform, id, changed[:], 2), p.Error.None)
-			phase_set(&client, .Changed)
-		case .Closing:
-			testing.expect_value(t, p.window_destroy(&platform, id), p.Error.None)
-			phase_set(&client, .Closed)
-		}
-		_, _ = p.wait_events(&platform, 5, nil)
+		time.sleep(5 * time.Millisecond)
 	}
-	thread.join(worker)
 	thread.destroy(worker)
 
-	testing.expect(t, !poll_failed)
+	if !testing.expect_value(t, fixture.init_result, p.Init_Result.Primary) {return}
+	testing.expect_value(t, fixture.shutdown_error, p.Error.None)
+	if !testing.expect_value(t, fixture.create_error, p.Error.None) {return}
+	if !testing.expect_value(t, fixture.set_error, p.Error.None) {return}
+	if !testing.expect(t, fixture.client_started) {return}
+	testing.expect_value(t, fixture.origin_error, p.Error.None)
+	testing.expect_value(t, fixture.pump_error, p.Error.None)
+	testing.expect_value(t, fixture.change_error, p.Error.None)
+	testing.expect_value(t, fixture.close_error, p.Error.None)
+	client := &fixture.client
 	testing.expect(t, !client.timed_out)
 	failure := client.failed_call
 	if !testing.expectf(t, failure == nil, "%s failed: 0x%x", failure, client.failed_result) {
@@ -540,6 +631,8 @@ ui_automation_reads_and_drives_the_access_tree :: proc(t: ^testing.T) {
 		{4, 0, "Search", UIA_EDIT},
 		{5, 0, "Theme", UIA_COMBO_BOX},
 		{6, 0, "Saved", UIA_TEXT},
+		{7, 0, "Files", UIA_LIST},
+		{8, 7, "README", UIA_LIST_ITEM},
 	}
 	if testing.expect_value(t, client.found_count, len(expected)) {
 		for &found, i in client.found[:client.found_count] {
@@ -549,7 +642,7 @@ ui_automation_reads_and_drives_the_access_tree :: proc(t: ^testing.T) {
 			testing.expect_value(t, text_string(&found.name), want.name)
 			testing.expect_value(t, found.control_type, want.control_type)
 			b := nodes[i].bounds
-			left, top := origin_x + i32(b[0]), origin_y + i32(b[1])
+			left, top := fixture.origin_x + i32(b[0]), fixture.origin_y + i32(b[1])
 			testing.expect_value(t, found.rect, w.RECT{left, top, left + i32(b[2]), top + i32(b[3])})
 			testing.expect_value(t, found.focusable, .Focusable in nodes[i].states)
 			// The app's focus is node 2, but a hidden window has no keyboard focus to give it.
@@ -566,11 +659,17 @@ ui_automation_reads_and_drives_the_access_tree :: proc(t: ^testing.T) {
 	testing.expect_value(t, client.invoke_result, w.HRESULT(0))
 	testing.expect_value(t, client.toggle_result, w.HRESULT(0))
 	testing.expect_value(t, client.expand_result, w.HRESULT(0))
+	testing.expect_value(t, client.select_result, w.HRESULT(0))
 	// Text is edited through the app's own keyboard handling; a value set from outside is refused.
 	testing.expect(t, client.set_value_result < 0)
-	wanted := [?]p.Access_Invoke_Event{{id, 2, .Invoke}, {id, 3, .Toggle}, {id, 5, .Expand}}
-	if testing.expect_value(t, len(requests), len(wanted)) {
-		for request, i in requests {testing.expect_value(t, request, wanted[i])}
+	wanted := [?]p.Access_Invoke_Event {
+		{fixture.window, 2, .Invoke},
+		{fixture.window, 3, .Toggle},
+		{fixture.window, 5, .Expand},
+		{fixture.window, 8, .Invoke},
+	}
+	if testing.expect_value(t, fixture.request_count, len(wanted)) {
+		for request, i in fixture.requests {testing.expect_value(t, request, wanted[i])}
 	}
 
 	testing.expect_value(t, u32(client.removed_name_result), u32(UIA_E_ELEMENTNOTAVAILABLE))

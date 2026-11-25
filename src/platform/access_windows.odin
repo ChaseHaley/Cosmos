@@ -117,11 +117,13 @@ when !HEADLESS {
 	@(private)
 	access_destroy :: proc(p: ^Platform, window: ^Window) {
 		if window.access == nil {return}
-		if result := cosmos_uia_destroy(window.access); result < 0 {
+		// Cleared first, so a WM_GETOBJECT sent while the provider is taken back is not answered with it.
+		access := window.access
+		window.access = nil
+		if result := cosmos_uia_destroy(access); result < 0 {
 			log.errorf("UiaDisconnectProvider failed: HRESULT 0x%x", u32(result))
 			p.error = .Os
 		}
-		window.access = nil
 	}
 
 	// Releases what assistive technologies still hold of any window's provider.

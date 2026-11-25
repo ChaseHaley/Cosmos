@@ -210,7 +210,8 @@ find_node :: proc(nodes: []platform.Access_Node, name: string) -> (platform.Acce
 	return {}, false
 }
 
-// The tree of the frame the starter drew last, after it took the events queued for it.
+// The tree of the frame the starter drew last, after it took the events queued for it. The tick frees its
+// temporary memory as main's loop does, so anything the starter keeps there across ticks reads as freed.
 @(private = "file")
 access_tick :: proc(
 	t: ^testing.T,
@@ -221,6 +222,7 @@ access_tick :: proc(
 	bool,
 ) {
 	starter.starter_tick(s)
+	free_all(context.temp_allocator)
 	nodes, focus, err := platform.window_access(&s.desktop, s.window)
 	return nodes, focus, testing.expect_value(t, err, platform.Error.None)
 }
@@ -275,6 +277,9 @@ screen_readers_read_and_work_the_context_menu :: proc(t: ^testing.T) {
 	nodes, focus, ok = access_tick(t, &s)
 	if !ok {return}
 	if !testing.expect(t, ui.submenu_shown(&s.menu.submenu), "Expand opened no submenu") {return}
+	// A second frame reads the rows the first one built, after that tick freed its temporary memory.
+	nodes, focus, ok = access_tick(t, &s)
+	if !ok {return}
 	speed, _ = find_node(nodes, "Playback speed")
 	testing.expect(t, .Expanded in speed.states, "the open submenu's row is not Expanded")
 	submenu: platform.Access_Node

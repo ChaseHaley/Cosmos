@@ -1,6 +1,7 @@
 package ui_test
 
 import "core:fmt"
+import "core:os"
 import "core:strconv"
 import "core:testing"
 import "core:time"
@@ -65,6 +66,14 @@ text_open :: proc(t: ^testing.T, text: ^ui.Text) -> (^font.System, bool) {
 	return fonts, true
 }
 
+@(private = "file")
+access_window_open :: proc(t: ^testing.T, p: ^platform.Platform, name: string) -> (input.Window_Id, bool) {
+	app_id := fmt.tprintf("Cosmos.Test.Access.Widgets.%s.%d", name, os.get_pid())
+	if !testing.expect_value(t, platform.init(p, app_id), platform.Init_Result.Primary) {return 0, false}
+	window, err := platform.window_create(p, {hidden = true, title = "Widget access", width = 400, height = 300})
+	return window, testing.expect_value(t, err, platform.Error.None)
+}
+
 // Closed, the dropdown is one collapsed Combo_Box on its field showing the shown label; open, it holds a
 // List of its options where they draw, so a press at an option's centre picks that option, and the
 // requests assistive technology makes do what Escape and a press do.
@@ -84,7 +93,8 @@ dropdown_access_describes_the_field_and_the_options_where_they_draw :: proc(t: ^
 	ui.access_init(&tree)
 	defer ui.access_destroy(&tree)
 
-	ui.dropdown_access(&d, c, ANCHOR, &tree, PARENT, ID, "Theme", "Light", false, 1)
+	focus := ui.dropdown_access(&d, c, ANCHOR, &tree, PARENT, ID, "Theme", "Light", false, 1)
+	testing.expect_value(t, focus, ID)
 	if !testing.expect_value(t, len(tree.nodes), 1) {return}
 	combo := tree.nodes[0]
 	testing.expect_value(t, combo.id, ID)
@@ -100,7 +110,7 @@ dropdown_access_describes_the_field_and_the_options_where_they_draw :: proc(t: ^
 
 	ui.dropdown_open(&d, c)
 	ui.access_begin(&tree)
-	ui.dropdown_access(&d, c, ANCHOR, &tree, PARENT, ID, "Theme", "Light", true, 1)
+	focus = ui.dropdown_access(&d, c, ANCHOR, &tree, PARENT, ID, "Theme", "Light", true, 1)
 	nodes := tree.nodes[:]
 	if !testing.expect_value(t, len(nodes), 2 + len(choices)) {return}
 	expect_tree(t, nodes, PARENT)
@@ -110,7 +120,7 @@ dropdown_access_describes_the_field_and_the_options_where_they_draw :: proc(t: ^
 	testing.expect_value(t, list.parent, ID)
 	popup := ui.dropdown_rect(&d, c, ANCHOR, 1)
 	testing.expect_value(t, list.bounds, rect_bounds(popup))
-	testing.expect_value(t, ui.dropdown_access_focus(&d, c, ID), ui.access_part(ID, 1))
+	testing.expect_value(t, focus, ui.access_part(ID, 1))
 	for item, i in nodes[2:] {
 		testing.expect_value(t, item.id, ui.access_part(ID, u64(i)))
 		testing.expect_value(t, item.parent, list.id)
@@ -185,7 +195,10 @@ dropdown_access_keeps_choice_ids_through_a_search_past_the_thirty_second :: proc
 	invoked := ui.dropdown_access_invoke(&d, c, ID, {id = option.id, action = .Invoke}, true)
 	testing.expect_value(t, invoked, ui.Dropdown_Access_Outcome(ui.Dropdown_Outcome.Chosen))
 	testing.expect_value(t, ui.dropdown_highlighted(&d, c), 37)
-	testing.expect_value(t, ui.dropdown_access_focus(&d, c, ID), option.id)
+	ui.access_begin(&tree)
+	focus := ui.dropdown_access(&d, c, ANCHOR, &tree, PARENT, ID, "Files", "1 file", true, 1)
+	testing.expect_value(t, focus, option.id)
+	nodes = tree.nodes[:]
 	d.list.index = 0
 	x, y := center(option)
 	testing.expect_value(t, ui.dropdown_press(&d, c, ANCHOR, nil, x, y, false, 1), ui.Dropdown_Outcome.Chosen)
@@ -201,6 +214,56 @@ dropdown_access_keeps_choice_ids_through_a_search_past_the_thirty_second :: proc
 	x, y = center(regex)
 	testing.expect_value(t, ui.dropdown_press(&d, c, ANCHOR, nil, x, y, false, 1), ui.Dropdown_Outcome.Changed)
 	testing.expect(t, !d.regex)
+}
+
+@(test)
+dropdown_access_commits_combo_focus_when_the_focused_child_does_not_fit :: proc(t: ^testing.T) {
+	p: platform.Platform
+	window, ok := access_window_open(t, &p, "Dropdown")
+	defer testing.expect_value(t, platform.destroy(&p), platform.Error.None)
+	if !ok {return}
+	choices := [?]string{"A", "B"}
+	c := ui.Dropdown_Choices{choices = choices[:], value = "B", searchable = true, font_filter = true}
+	d: ui.Dropdown
+	ui.dropdown_init(&d)
+	defer ui.dropdown_destroy(&d)
+	ui.dropdown_open(&d, c)
+	tree: ui.Access_Tree
+	ui.access_init(&tree)
+	defer ui.access_destroy(&tree)
+
+	narrow := ANCHOR
+	narrow.bounds.width = 16
+	testing.expect_value(t, ui.dropdown_rect(&d, c, narrow, 1).width, 0)
+	testing.expect_value(t, ui.dropdown_highlighted(&d, c), 1)
+	focus := ui.dropdown_access(&d, c, narrow, &tree, 0, ID, "Font", "B", true, 1)
+	testing.expect_value(t, ui.access_commit(&tree, &p, window, focus), platform.Error.None)
+	testing.expect_value(t, focus, ID)
+	if !testing.expect_value(t, len(tree.nodes), 1) {return}
+	testing.expect(t, .Expanded in tree.nodes[0].states)
+
+	ui.dropdown_key(&d, c, narrow, {key = .Tab, pressed = true}, 1)
+	ui.access_begin(&tree)
+	focus = ui.dropdown_access(&d, c, narrow, &tree, 0, ID, "Font", "B", true, 1)
+	testing.expect_value(t, ui.access_commit(&tree, &p, window, focus), platform.Error.None)
+	testing.expect_value(t, focus, ID)
+
+	// A popup can also fit while its inset switch still has no width.
+	narrow.bounds.width = 20
+	testing.expect(t, ui.dropdown_rect(&d, c, narrow, 1).width > 0)
+	ui.access_begin(&tree)
+	focus = ui.dropdown_access(&d, c, narrow, &tree, 0, ID, "Font", "B", true, 1)
+	testing.expect_value(t, ui.access_commit(&tree, &p, window, focus), platform.Error.None)
+	testing.expect_value(t, focus, ID)
+	_, has_switch := named(tree.nodes[:], "Show all fonts")
+	testing.expect(t, !has_switch)
+
+	ui.access_begin(&tree)
+	focus = ui.dropdown_access(&d, c, ANCHOR, &tree, 0, ID, "Font", "B", true, 1)
+	testing.expect_value(t, ui.access_commit(&tree, &p, window, focus), platform.Error.None)
+	font_switch, found := named(tree.nodes[:], "Show all fonts")
+	if !testing.expect(t, found) {return}
+	testing.expect_value(t, focus, font_switch.id)
 }
 
 // The open bar is a Group of its controls where find_layout puts them, with the query's text, the toggles'
@@ -306,6 +369,40 @@ find_access_describes_the_bar_and_routes_its_buttons_as_clicks :: proc(t: ^testi
 	ui.access_begin(&tree)
 	ui.find_access(&f, &tree, &text, PARENT, ID, "Find in terminal", status, true, 1000, 1)
 	testing.expect_value(t, len(tree.nodes), 0)
+}
+
+@(test)
+find_access_commits_query_focus_even_when_the_field_has_no_width :: proc(t: ^testing.T) {
+	p: platform.Platform
+	window, ok := access_window_open(t, &p, "Find")
+	defer testing.expect_value(t, platform.destroy(&p), platform.Error.None)
+	if !ok {return}
+	text: ui.Text
+	fonts, text_ok := text_open(t, &text)
+	if !text_ok {return}
+	defer font.system_destroy(fonts)
+	f: ui.Find_Bar
+	ui.find_init(&f)
+	defer ui.find_destroy(&f)
+	ui.find_open(&f)
+	ui.find_text(&f, "needle")
+	testing.expect(t, ui.find_has_keyboard(&f))
+	tree: ui.Access_Tree
+	ui.access_init(&tree)
+	defer ui.access_destroy(&tree)
+
+	for width in ([?]f32{80, 24}) {
+		ui.access_begin(&tree)
+		ui.find_access(&f, &tree, &text, 0, ID, "Find in terminal", "", false, width, 1)
+		testing.expect_value(t, ui.access_commit(&tree, &p, window, ID), platform.Error.None)
+		query, found := named(tree.nodes[:], "Find")
+		if !testing.expect(t, found) {continue}
+		testing.expect_value(t, query.id, ID)
+		testing.expect_value(t, query.role, platform.Access_Role.Text_Field)
+		testing.expect_value(t, query.value, "needle")
+		testing.expect_value(t, query.bounds[2], 0)
+		testing.expect(t, .Focusable in query.states)
+	}
 }
 
 @(private = "file")
