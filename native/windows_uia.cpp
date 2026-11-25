@@ -3,6 +3,7 @@
 #include <uiautomation.h>
 
 #include <atomic>
+#include <charconv>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
@@ -248,7 +249,11 @@ public:
         case UIA_NamePropertyId:
             if (!node->name.empty()) return text_variant(node->name, out);
             break;
-        case UIA_AutomationIdPropertyId: return text_variant(std::to_string(node->id), out);
+        case UIA_AutomationIdPropertyId: {
+            char digits[20];
+            auto written = std::to_chars(digits, digits + sizeof(digits), node->id);
+            return text_variant(std::string_view(digits, static_cast<size_t>(written.ptr - digits)), out);
+        }
         case UIA_IsEnabledPropertyId: bool_variant(!has(node->states, State_Disabled), out); break;
         case UIA_IsKeyboardFocusablePropertyId: bool_variant(has(node->states, State_Focusable), out); break;
         // Nothing in a window has keyboard focus while another window has it.
@@ -445,9 +450,10 @@ public:
         return S_OK;
     }
 
-    // ISelectionItemProvider: selection is read only, as the app changes it through its own input.
+    // ISelectionItemProvider: selecting an item picks it, as a click or Enter would, so Select reaches the
+    // app as an invoke of the item. Lists hold one selection, so adding to or removing from it is refused.
 
-    HRESULT STDMETHODCALLTYPE Select() override { return refuse_selection(); }
+    HRESULT STDMETHODCALLTYPE Select() override { return act(has_selection_item, Request_Invoke); }
     HRESULT STDMETHODCALLTYPE AddToSelection() override { return refuse_selection(); }
     HRESULT STDMETHODCALLTYPE RemoveFromSelection() override { return refuse_selection(); }
     HRESULT STDMETHODCALLTYPE get_IsSelected(BOOL *out) override {
@@ -771,12 +777,26 @@ HRESULT cosmos_uia_set(void *handle, const Access_Node *nodes, size_t count, uin
     }
 }
 
-// Takes the provider back from UI Automation before the window goes. Providers an assistive technology
-// still holds keep the shared tree alive, emptied, and answer UIA_E_ELEMENTNOTAVAILABLE.
+// Takes the provider back from UI Automation before the window goes. UiaDisconnectProvider finds what
+// clients hold by the provider's runtime id, which the root gets from the window's host provider, so
+// every provider is disconnected while the window and the nodes are still in place. Providers an
+// assistive technology holds afterwards keep the shared tree alive, emptied, and answer
+// UIA_E_ELEMENTNOTAVAILABLE.
 HRESULT cosmos_uia_destroy(void *handle) noexcept {
     auto *state = static_cast<State *>(handle);
     Tree &tree = *state->tree;
-    HWND window = tree.window;
+    HRESULT result = S_OK;
+    if (state->served) {
+        UiaReturnRawElementProvider(tree.window, 0, 0, nullptr);
+        for (const Node &node : tree.nodes) {
+            auto *element = new (std::nothrow) Element(state->tree, node.id);
+            HRESULT disconnected = element ? UiaDisconnectProvider(element) : E_OUTOFMEMORY;
+            if (element) element->Release();
+            if (FAILED(disconnected) && SUCCEEDED(result)) result = disconnected;
+        }
+        HRESULT disconnected = UiaDisconnectProvider(state->root);
+        if (FAILED(disconnected) && SUCCEEDED(result)) result = disconnected;
+    }
     tree.window = nullptr;
     tree.user = nullptr;
     tree.request = nullptr;
@@ -785,11 +805,6 @@ HRESULT cosmos_uia_destroy(void *handle) noexcept {
     std::unordered_map<uint64_t, int>().swap(tree.index);
     tree.first_child = tree.last_child = -1;
     tree.focus = 0;
-    HRESULT result = S_OK;
-    if (state->served) {
-        UiaReturnRawElementProvider(window, 0, 0, nullptr);
-        result = UiaDisconnectProvider(state->root);
-    }
     state->root->Release();
     delete state;
     return result;

@@ -185,8 +185,8 @@ Access_Node :: struct {
 	bounds:      [4]f32,
 	states:      bit_set[Access_State;u16],
 }
-// What an assistive technology asked a node to do: press a Button or a Menu_Item, toggle a Check_Box,
-// or open or close a Combo_Box or a submenu.
+// What an assistive technology asked a node to do: press a Button or a Menu_Item, pick a List_Item
+// (UI Automation's Select), toggle a Check_Box, or open or close a Combo_Box or a submenu.
 Access_Action :: enum u8 {
 	Invoke,
 	Toggle,
