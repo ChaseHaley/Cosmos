@@ -38,6 +38,8 @@ Icon :: enum {
 	Copy,
 	Trash,
 	Undo,
+	// A circle turning clockwise, open at the upper right where its arrowhead points on: load again.
+	Refresh,
 	Check,
 	Check_Double,
 	Circle,
@@ -202,6 +204,21 @@ pen_eye :: proc(p: Icon_Pen, crossed: bool) {
 		start + 2 * reach - angle - math.PI - gap, p.width, p.ink)
 	slash := 6 * p.unit * [2]f32{1, 1}
 	_ = render.push_segment(p.list, c - slash, c + slash, p.width, p.ink)
+}
+
+// The circle runs clockwise from three o'clock round to the upper right, where the arrowhead's arms
+// meet its open end, one level with it and one plumb. The centre takes the half-pixel offset that
+// pen_point gives lines, and the end sits a whole number of pixels from it on each axis, so the arms
+// are as sharp as any other icon's straight lines and still meet the circle exactly.
+@(private = "file")
+pen_refresh :: proc(p: Icon_Pen) {
+	c := pen_point(p, 8, 8)
+	reach := math.round(4 * p.unit)
+	_ = render.push_arc(p.list, c, reach * math.SQRT_TWO, 0, 1.75 * math.PI, p.width, p.ink)
+	tip := c + [2]f32{reach, -reach}
+	arm := math.round(3 * p.unit)
+	_ = render.push_segment(p.list, tip - {arm, 0}, tip, p.width, p.ink)
+	_ = render.push_segment(p.list, tip, tip - {0, arm}, p.width, p.ink)
 }
 
 // Draws `icon` centred in `area` at `size` DIPs.
@@ -437,6 +454,8 @@ icon_draw :: proc(
 		pen_path(p, {2, 6}, {10, 6})
 		pen_arc(p, 10, 9.5, 3.5, -math.PI / 2, math.PI)
 		pen_path(p, {10, 13}, {7, 13})
+	case .Refresh:
+		pen_refresh(p)
 	case .Window_Out:
 		pen_path(p, {7, 2}, {2, 2}, {2, 14}, {14, 14}, {14, 9})
 		pen_path(p, {8, 8}, {14, 2})
