@@ -274,50 +274,43 @@ find_layout :: proc(width, scale: f32, status_width: f32 = 0) -> Find_Layout {
 	}
 	padding, gap, button, toggle := FIND_PADDING * scale, 8 * scale, 32 * scale, FIND_TOGGLE * scale
 	inner := max(0, panel_width - 2 * padding)
-	left := l.panel.x + min(padding, panel_width)
-	right := left + inner
-	y := l.panel.y + 4 * scale
+	row := render.Rect{l.panel.x + min(padding, panel_width), l.panel.y + 4 * scale, inner, button}
 	controls := status_width + gap + 2 * button
 	stacked := inner < 80 * scale + 2 * toggle + gap + controls + gap + button
-	l.close = {right - button, y, button, button}
-	edge := l.close.x - gap
+	// The query and its toggles, and the two arrows, sit flush, so the gaps between groups are items of
+	// their own. Tiny windows squeeze the controls; the stacks clip them so none reaches outside the panel.
+	flush_end := Stack{align = .End}
 	if !stacked {
-		l.down = {edge - button, y, button, button}
-		l.up = {l.down.x - button, y, button, button}
-		l.status = {l.up.x - gap - status_width, y, status_width, button}
-		edge = l.status.x - gap
-	}
-	l.regex_toggle = {edge - toggle, y, toggle, button}
-	l.case_toggle = {l.regex_toggle.x - toggle, y, toggle, button}
-	l.query = {left, y, max(0, l.case_toggle.x - left), button}
-	if stacked {
-		y += FIND_HEIGHT * scale
-		l.panel.height += FIND_HEIGHT * scale
-		// On very narrow windows give the count its own row to keep every digit visible.
-		separate := inner < controls
-		l.status = {left, y, min(status_width, inner), button}
-		if separate {
-			y += FIND_HEIGHT * scale
-			l.panel.height += FIND_HEIGHT * scale
+		items := [?]Stack_Item {
+			{fill = 1}, {size = toggle}, {size = toggle}, {size = gap}, {size = status_width},
+			{size = gap}, {size = button}, {size = button}, {size = gap}, {size = button},
 		}
-		l.down = {right - button, y, button, button}
-		l.up = {l.down.x - button, y, button, button}
-		if !separate { l.status.x = l.up.x - gap - l.status.width }
+		rects: [len(items)]render.Rect
+		stack_layout(flush_end, row, items[:], rects[:])
+		l.query, l.case_toggle, l.regex_toggle = rects[0], rects[1], rects[2]
+		l.status, l.up, l.down, l.close = rects[4], rects[6], rects[7], rects[9]
+		return l
 	}
-	// Tiny windows squeeze the controls; clip them so none reaches outside the panel.
-	content := render.Rect{left, l.panel.y, inner, l.panel.height}
-	controls_rects := [?]^render.Rect {
-		&l.query, &l.case_toggle, &l.regex_toggle, &l.status, &l.up, &l.down, &l.close,
+	query_items := [?]Stack_Item{{fill = 1}, {size = toggle}, {size = toggle}, {size = gap}, {size = button}}
+	query_rects: [len(query_items)]render.Rect
+	stack_layout(flush_end, row, query_items[:], query_rects[:])
+	l.query, l.case_toggle, l.regex_toggle = query_rects[0], query_rects[1], query_rects[2]
+	l.close = query_rects[4]
+	row.y += FIND_HEIGHT * scale
+	l.panel.height += FIND_HEIGHT * scale
+	arrow_items := [?]Stack_Item{{size = status_width}, {size = gap}, {size = button}, {size = button}}
+	arrow_rects: [len(arrow_items)]render.Rect
+	// On very narrow windows give the count its own row to keep every digit visible.
+	if inner < controls {
+		stack_layout(Stack{}, row, arrow_items[:1], arrow_rects[:1])
+		row.y += FIND_HEIGHT * scale
+		l.panel.height += FIND_HEIGHT * scale
+		stack_layout(flush_end, row, arrow_items[2:], arrow_rects[2:])
+	} else {
+		stack_layout(flush_end, row, arrow_items[:], arrow_rects[:])
 	}
-	for r in controls_rects { r^ = clip_rect(r^, content) }
+	l.status, l.up, l.down = arrow_rects[0], arrow_rects[2], arrow_rects[3]
 	return l
-}
-
-@(private)
-clip_rect :: proc(r, bounds: render.Rect) -> render.Rect {
-	x := clamp(r.x, bounds.x, bounds.x + bounds.width)
-	right := clamp(r.x + r.width, bounds.x, bounds.x + bounds.width)
-	return {x, r.y, max(0, right - x), r.height}
 }
 
 find_contains :: proc(l: Find_Layout, x, y: f32) -> bool { return render.rect_contains(l.panel, x, y) }
