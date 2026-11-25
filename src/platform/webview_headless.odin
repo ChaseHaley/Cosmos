@@ -70,7 +70,7 @@ when HEADLESS {
 		level: i32,
 		vis_x, vis_y, vis_w, vis_h: i32,
 		clip_l, clip_t, clip_r, clip_b: f32,
-		bounds_w, bounds_h: i32,
+		bounds_x, bounds_y, bounds_w, bounds_h: i32,
 		radius_bl, radius_br, raster_scale: f32,
 	) {}
 
