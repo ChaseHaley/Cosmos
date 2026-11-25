@@ -194,7 +194,7 @@ expect_view_start :: proc(t: ^testing.T, f: ^ui.Text_Field, text: ^ui.Text, avai
 	value := ui.field_string(f)
 	previous, stop := -1, 0
 	for stop < start {
-		previous, stop = stop, ui.rune_right(f, stop)
+		previous, stop = stop, ui.caret_stop_right(f, stop)
 	}
 	testing.expectf(t, stop == start, "start %d is not a caret stop", start)
 	if start < f.cursor {

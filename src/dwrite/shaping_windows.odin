@@ -169,6 +169,7 @@ Line_Breakpoint :: bit_field u8 {
 Font_Feature_Tag :: distinct u32
 FONT_FEATURE_TAG_CONTEXTUAL_ALTERNATES :: Font_Feature_Tag(0x746c6163)
 FONT_FEATURE_TAG_STANDARD_LIGATURES :: Font_Feature_Tag(0x6167696c)
+FONT_FEATURE_TAG_KERNING :: Font_Feature_Tag(0x6e72656b)
 
 Font_Feature :: struct {
 	nameTag:   Font_Feature_Tag,

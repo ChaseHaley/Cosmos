@@ -3,9 +3,10 @@ package ui
 import "cosmos:font"
 import "cosmos:platform"
 import "cosmos:render"
+import "base:runtime"
+import "core:log"
 import "core:math"
 import "core:strings"
-import "core:unicode/utf8"
 import "cosmos:textedit"
 
 // A wrapped, multi-line plain-text editor for a short note such as a comment (D-100). The text and its
@@ -73,27 +74,27 @@ text_area_reset :: proc(a: ^Text_Area) {
 	a^ = {lines = lines}
 }
 
-// The advance of one rune as the area sets it: a tab is TAB_COLUMNS spaces wide, as in the diff's
-// code, and a rune with no glyph takes no room, as `draw_text` skips it. `space` is `code_space` of `t`.
+// Where the caret stands along `row` as area_row_draw sets it: the text between tabs as the font sets it,
+// and each tab as the TAB_COLUMNS spaces it spans, as in the diff's code. Without memory it lays out
+// nothing.
 @(private = "file")
-area_advance :: proc(t: ^Text, r: rune, space: f32) -> f32 {
-	_, advance, _ := code_rune(t, r, space)
-	return advance
-}
-
-// The width of `s` as the area draws it: the text between tabs as the font sets it, and each tab as the
-// columns it spans.
-@(private = "file")
-area_width :: proc(t: ^Text, s: string) -> f32 {
-	width: f32
-	rest := s
-	for rest != "" {
+area_row_line :: proc(t: ^Text, row: string) -> Text_Line {
+	x := make([dynamic]f32, 0, len(row) + 1, context.temp_allocator)
+	tab := TAB_COLUMNS * code_space(t)
+	pen: f32
+	rest := row
+	for {
 		end := strings.index_byte(rest, '\t')
-		if end < 0 {return width + text_width(t, rest)}
-		width += text_width(t, rest[:end]) + TAB_COLUMNS * code_space(t)
+		err: runtime.Allocator_Error
+		pen, err = line_fill(t, end < 0 ? rest : rest[:end], &x, pen)
+		if err != nil {
+			log.errorf("ui: laying out a text area row failed: %v", err)
+			return {}
+		}
+		if end < 0 {return {x[:]}}
+		pen += tab
 		rest = rest[end + 1:]
 	}
-	return width
 }
 
 // Draws one row of the area's text from `x`, leaving the room of each tab it holds empty.
@@ -117,56 +118,67 @@ area_row_draw :: proc(
 }
 
 // Wraps the buffer's text to `width` pixels, unless that was already done for this text, width and font.
-// Lines break at '\n', after the last space that lets the line fit, and inside a word wider than a line.
-// Spaces hang past the width instead of breaking a line, so they stay at their line's end.
+// Lines break at '\n' (or "\r\n"), and inside a paragraph as area_wrap_paragraph says.
 @(private = "file")
 area_wrap :: proc(a: ^Text_Area, b: ^textedit.Buffer, t: ^Text, width: f32) {
 	if a.wrapped && a.wrapped_revision == b.revision && a.wrapped_width == width &&
 	   a.wrapped_size == t.size_px && a.wrapped_family == t.family {
 		return
 	}
-	space := code_space(t)
 	a.wrapped, a.wrapped_revision, a.wrapped_width = true, b.revision, width
 	a.wrapped_size, a.wrapped_family = t.size_px, t.family
 	clear(&a.lines)
 	s := textedit.to_string(b)
-	start, last_break := 0, -1
+	paragraph := 0
+	for {
+		newline := strings.index_byte(s[paragraph:], '\n')
+		end := newline < 0 ? len(s) : paragraph + newline
+		if newline > 0 && s[end - 1] == '\r' {end -= 1}
+		start := area_wrap_paragraph(a, t, s, paragraph, end, width)
+		append(&a.lines, Text_Area_Line{start, end})
+		if newline < 0 {return}
+		paragraph += newline + 1
+	}
+}
+
+// Wraps s[from:to], which no line break interrupts, appending every line but its last and returning where
+// that one starts. Lines break after the last space that lets the line fit, and inside a word wider than a
+// line, measured a grapheme cluster at a time along the paragraph as the font shapes it. Spaces hang past
+// the width instead of breaking a line, so they stay at their line's end.
+@(private = "file")
+area_wrap_paragraph :: proc(a: ^Text_Area, t: ^Text, s: string, from, to: int, width: f32) -> int {
+	line := area_row_line(t, s[from:to])
+	// Text that could not be laid out stays one line.
+	if line.x == nil {return from}
+	start, last_break := from, -1
 	pen, pen_at_break: f32
 	word := false
-	for offset := 0; offset < len(s); {
-		r, size := utf8.decode_rune_in_string(s[offset:])
-		next := offset + size
-		if r == '\n' || (r == '\r' && next < len(s) && s[next] == '\n') {
-			if r == '\r' {next += 1}
-			append(&a.lines, Text_Area_Line{start, offset})
-			start, last_break, pen, word = next, -1, 0, false
-			offset = next
-			continue
-		}
-		advance := area_advance(t, r, space)
-		if r == ' ' || r == '\t' {
+	for at := from; at < to; {
+		next := from + text_line_next(line, at - from)
+		advance := text_line_x(line, next - from) - text_line_x(line, at - from)
+		if next == at + 1 && (s[at] == ' ' || s[at] == '\t') {
 			pen += advance
 			// A space may break the line only after a word; a line of leading spaces stays whole.
 			if word {last_break, pen_at_break = next, pen}
-			offset = next
+			at = next
 			continue
 		}
-		if pen + advance > width && offset > start {
+		if pen + advance > width && at > start {
 			if last_break > start {
 				append(&a.lines, Text_Area_Line{start, last_break})
 				start = last_break
 				pen -= pen_at_break
 			} else {
-				append(&a.lines, Text_Area_Line{start, offset})
-				start, pen = offset, 0
+				append(&a.lines, Text_Area_Line{start, at})
+				start, pen = at, 0
 			}
 			last_break = -1
 		}
 		pen += advance
 		word = true
-		offset = next
+		at = next
 	}
-	append(&a.lines, Text_Area_Line{start, len(s)})
+	return start
 }
 
 // The padding above and below the lines: what centres one line in a standard field, so a one-line area
@@ -240,26 +252,21 @@ area_row :: proc(a: ^Text_Area, offset: int) -> int {
 @(private = "file")
 area_offset_in_row :: proc(a: ^Text_Area, b: ^textedit.Buffer, t: ^Text, row: int, x: f32) -> int {
 	line := a.lines[row]
-	s := textedit.to_string(b)
-	space := code_space(t)
-	pen: f32
-	for r, i in s[line.start:line.end] {
-		advance := area_advance(t, r, space)
-		if x < pen + advance / 2 {return line.start + i}
-		pen += advance
+	row_line := area_row_line(t, textedit.to_string(b)[line.start:line.end])
+	at := line.start + text_line_offset_at(row_line, x)
+	// The end of a wrapped line is the start of the next one, so the caret stays before its last cluster.
+	wrapped := row + 1 < len(a.lines) && a.lines[row + 1].start == line.end
+	if at == line.end && line.end > line.start && wrapped {
+		return line.start + text_line_previous(row_line, line.end - line.start)
 	}
-	// The end of a wrapped line is the start of the next one, so the caret stays before its last rune.
-	if row + 1 < len(a.lines) && a.lines[row + 1].start == line.end && line.end > line.start {
-		_, size := utf8.decode_last_rune_in_string(s[line.start:line.end])
-		return line.end - size
-	}
-	return line.end
+	return at
 }
 
 // How far `offset` is from the text's left edge on its row.
 @(private = "file")
 area_x_of :: proc(a: ^Text_Area, b: ^textedit.Buffer, t: ^Text, row, offset: int) -> f32 {
-	return area_width(t, string(b.text[a.lines[row].start:offset]))
+	line := a.lines[row]
+	return text_line_x(area_row_line(t, textedit.to_string(b)[line.start:line.end]), offset - line.start)
 }
 
 @(private = "file")
@@ -276,8 +283,8 @@ text_area_offset_at :: proc(box: Text_Area_Box, x, y: f32) -> int {
 	return area_offset_in_row(a, box.buffer, &t, row, x - frame.x)
 }
 
-// The cell the caret occupies for `offset`, in the window: the character under it, or a space at the
-// end of a line, one line tall.
+// The cell the caret occupies for `offset`, in the window: the cluster under it, or a space at the end of
+// a line, one line tall.
 @(require_results)
 text_area_caret_rect :: proc(box: Text_Area_Box, offset: int) -> render.Rect {
 	frame, t := area_laid_out(box)
@@ -285,18 +292,14 @@ text_area_caret_rect :: proc(box: Text_Area_Box, offset: int) -> render.Rect {
 	s := textedit.to_string(box.buffer)
 	at := clamp(offset, 0, len(s))
 	row := area_row(a, at)
-	space := code_space(&t)
-	width := area_advance(&t, ' ', space)
-	if at < len(s) && s[at] != '\n' && s[at] != '\r' {
-		r, _ := utf8.decode_rune_in_string(s[at:])
-		width = area_advance(&t, r, space)
+	line := a.lines[row]
+	row_line := area_row_line(&t, s[line.start:line.end])
+	x := text_line_x(row_line, at - line.start)
+	width := code_space(&t)
+	if at < line.end && s[at] != '\r' {
+		width = text_line_x(row_line, text_line_next(row_line, at - line.start)) - x
 	}
-	return {
-		frame.x + area_x_of(a, box.buffer, &t, row, at),
-		frame.y + f32(row) * t.line_height - a.scroll,
-		max(1, width),
-		t.line_height,
-	}
+	return {frame.x + x, frame.y + f32(row) * t.line_height - a.scroll, max(1, width), t.line_height}
 }
 
 // Scrolls the text so the caret is in the box, once for each place the caret and the box have been in;
@@ -425,7 +428,7 @@ text_area_draw :: proc(
 	first := max(0, int(math.floor(a.scroll / lh)))
 	last := min(len(a.lines) - 1, int(math.ceil((a.scroll + frame.height) / lh)) - 1)
 	low, high := textedit.selection(b)
-	space := focused && low != high ? area_advance(&t, ' ', code_space(&t)) : 0
+	space := focused && low != high ? code_space(&t) : 0
 	for row in first ..= last {
 		if rect, selected := area_selection_rect(a, &t, s, frame, row, low, high, space); selected && focused {
 			draw_rect(list, {rect = rect, color = theme.text_selection})
@@ -520,8 +523,9 @@ area_selection_rect :: proc(
 	next := row + 1 < len(a.lines) ? a.lines[row + 1].start : line.end
 	hard := next > line.end
 	if !(high > line.start && low < (hard ? next : line.end)) {return}
-	left := frame.x + area_width(t, s[line.start:clamp(low, line.start, line.end)])
-	right := frame.x + area_width(t, s[line.start:clamp(high, line.start, line.end)])
+	row_line := area_row_line(t, s[line.start:line.end])
+	left := frame.x + text_line_x(row_line, clamp(low, line.start, line.end) - line.start)
+	right := frame.x + text_line_x(row_line, clamp(high, line.start, line.end) - line.start)
 	if hard && high >= next {right += space}
 	right = min(right, frame.x + frame.width)
 	return {left, frame.y + f32(row) * t.line_height - a.scroll, right - left, t.line_height}, true
