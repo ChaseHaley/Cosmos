@@ -559,6 +559,24 @@ backdrop_blur_softens_what_is_under_its_clip_only :: proc(t: ^testing.T) {
 }
 
 @(test)
+backdrop_saturate_strengthens_colours_under_its_clip_only :: proc(t: ^testing.T) {
+	f, ok := fixture_create(t, 16, 8)
+	if !ok {
+		return
+	}
+	defer fixture_destroy(&f)
+	layer(t, &f.list, {0, 0, 16, 8})
+	rect(t, &f.list, {rect = {0, 0, 16, 8}, color = {0.8, 0.4, 0.2, 1}})
+	testing.expect_value(t, render.push_backdrop_blur(&f.list, {0, 0, 8, 8}, 2, 0, 0.5), render.Error.None)
+	pixels := render_pixels(t, &f)
+	defer delete(pixels)
+	// As CSS saturate(150%): each channel moves half again as far from the luminance 0.4706, to 0.965,
+	// 0.365 and 0.065. Surfaces read back as BGRA.
+	expect_pixel(t, pixels, 16, 4, 4, {17, 93, 246, 255}, 2)
+	expect_pixel(t, pixels, 16, 12, 4, {51, 102, 204, 255}, 1)
+}
+
+@(test)
 shadow_fill_draws_nothing_under_its_caster :: proc(t: ^testing.T) {
 	f, ok := fixture_create(t, 32, 32)
 	if !ok {

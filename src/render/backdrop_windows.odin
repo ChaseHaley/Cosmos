@@ -162,7 +162,7 @@ backdrop_blur :: proc(
 		clip_width / size.x,
 		clip_height / size.y,
 	}
-	k.blur = {0, 1 / size.y, sigma, 0}
+	k.blur = {0, 1 / size.y, sigma, layer.saturate}
 	if err := constants_write(d, &k); err != .None {return err}
 	c->PSSetShaderResources(4, 1, &b.pass_view)
 	c->DrawInstanced(6, 1, 0, 0)

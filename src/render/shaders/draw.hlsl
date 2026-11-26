@@ -239,7 +239,9 @@ float4 dust_ps(Vertex i) : SV_Target {
 }
 
 // One pass of a backdrop blur (backdrop_windows.odin): a gaussian of standard deviation blur.z texels
-// along blur.xy, one texel's step in uv, its samples kept inside blur_limit, the region copied.
+// along blur.xy, one texel's step in uv, its samples kept inside blur_limit, the region copied. blur.w
+// adds saturation as CSS saturate() does, away from the Rec. 709 luminance; premultiplied colour allows
+// it, being linear in rgb, and the result is kept within its alpha.
 float4 blur_ps(Vertex i) : SV_Target {
     float sigma = blur.z;
     int reach = (int)ceil(3 * sigma);
@@ -251,7 +253,10 @@ float4 blur_ps(Vertex i) : SV_Target {
         sum += image_texture.SampleLevel(image_sampler, uv, 0) * w;
         total += w;
     }
-    return sum / total * clip_coverage(i.position.xy);
+    float4 color = sum / total;
+    float luma = dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
+    color.rgb = clamp(lerp(luma.xxx, color.rgb, 1 + blur.w), 0, color.a);
+    return color * clip_coverage(i.position.xy);
 }
 
 // DirectWrite grayscale correction, after microsoft/terminal src/renderer/atlas/dwrite.hlsl (MIT).

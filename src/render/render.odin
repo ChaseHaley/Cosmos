@@ -118,13 +118,15 @@ IMAGE_KEY_RENDERED :: u64(1) << 63
 IMAGE_KEY_TARGET :: u64(1) << 62
 
 // A layer draws its rects, then its images, then its glyphs. With `blur` set, it first blurs what is
-// already drawn under its clip, as frosted glass: a gaussian with that standard deviation in pixels.
+// already drawn under its clip, as frosted glass: a gaussian with that standard deviation in pixels,
+// whose colours `saturate` then strengthens: 0 leaves them, 0.5 gives CSS's saturate(150%), -1 grey.
 // The scissor limit, when present, is rectangular containment; clip and radius still describe
 // this layer's own rounded mask, not a chain of ancestor masks.
 Layer :: struct {
 	clip:                                             Rect,
 	radius:                                           f32,
 	blur:                                             f32,
+	saturate:                                         f32,
 	scissored:                                        bool,
 	scissor_limit:                                    Rect,
 	rect_start, rect_count, glyph_start, glyph_count: int,
@@ -455,12 +457,19 @@ append_layer :: proc(list: ^Draw_List, layer: ^Layer) -> Error {
 	return list.error
 }
 
-// Pushes a layer that blurs what is drawn under `clip` by a gaussian of standard deviation `sigma` pixels
-// before its own content draws; see Layer.
+// Pushes a layer that blurs what is drawn under `clip` by a gaussian of standard deviation `sigma` pixels,
+// with `saturate` added to its colours' saturation, before its own content draws; see Layer.
 @(require_results)
-push_backdrop_blur :: proc(list: ^Draw_List, clip: Rect, sigma: f32, radius: f32 = 0) -> Error {
+push_backdrop_blur :: proc(
+	list: ^Draw_List,
+	clip: Rect,
+	sigma: f32,
+	radius: f32 = 0,
+	saturate: f32 = 0,
+) -> Error {
 	if push_layer(list, clip, radius) != .None {return list.error}
 	list.layers[len(list.layers) - 1].blur = sigma
+	list.layers[len(list.layers) - 1].saturate = saturate
 	return .None
 }
 

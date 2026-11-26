@@ -102,8 +102,8 @@ Frame_Constants :: struct {
 	dust:                    [4]f32,
 	dust_ash:                Color,
 	dust_grid:               [4]u32,
-	// Backdrop blur only: one texel's step along the pass in uv, then the standard deviation in texels;
-	// and the uv rect its samples stay in.
+	// Backdrop blur only: one texel's step along the pass in uv, the standard deviation in texels and the
+	// saturation added to the result (0 on the first pass); and the uv rect its samples stay in.
 	blur:                    [4]f32,
 	blur_limit:              Rect,
 }
